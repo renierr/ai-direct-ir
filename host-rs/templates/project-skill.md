@@ -17,7 +17,11 @@ provider, or its WIT/Component Model integration.
   `host-rs build` forces a rebuild.
 - `host-rs build` assembles, validates, and compiles before writing. A failed
   build leaves the previous artifact in place; errors name the fragment file and
-  line you wrote, not the expanded text.
+  line you wrote, not the expanded text. Progress goes to stderr.
+- Never hand-write a string's byte length. Name the data segment --
+  `(data $msg (i32.const 0x1000) "...")` -- and read `$msg.ptr` / `$msg.len`,
+  which host-rs derives from the segment. A named segment needs a literal
+  offset and may not overlap another. Unnamed segments are unchanged.
 - `wasm-tools` is an optional cross-check, never required to build an app. Use
   `validate`, `component wit`, and `component targets`; do not place it in an
   application distribution or invoke it at runtime. `wasm-tools compose` is
