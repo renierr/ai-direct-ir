@@ -58,6 +58,11 @@ fn stderr(out: &Output) -> String {
 
 /// Scaffold a native project in a fresh directory and return the project dir.
 fn scaffold(name: &str) -> PathBuf {
+    scaffold_target(name, "native")
+}
+
+/// Scaffold a project for `target` in a fresh directory and return its dir.
+fn scaffold_target(name: &str, target: &str) -> PathBuf {
     let dir = scratch(name);
     let mut child = Command::new(host_rs())
         .args(["new", "app"])
@@ -71,8 +76,8 @@ fn scaffold(name: &str) -> PathBuf {
         .stdin
         .as_mut()
         .expect("stdin")
-        .write_all(b"native\n")
-        .expect("choose native target");
+        .write_all(format!("{target}\n").as_bytes())
+        .expect("choose the target");
     let out = child.wait_with_output().expect("host-rs new finished");
     assert!(out.status.success(), "new failed: {}", stderr(&out));
     dir.join("app")
@@ -241,6 +246,7 @@ fn repository_examples_check() {
         "examples/prompts/prompts.toml",
         "examples/prompts-raw/prompts-raw.toml",
         "examples/gui-hello/host.toml",
+        "examples/component-hello/host.toml",
     ];
     for manifest in manifests {
         let out = run(&repo, &["check", manifest]);
@@ -276,6 +282,14 @@ fn pi_example_prints_the_requested_digits() {
         "unexpected pi output: {}",
         stdout(&out)
     );
+}
+
+#[test]
+fn component_example_prints_its_greeting() {
+    let _shared = examples_lock();
+    let out = run(&repo(), &["run", "examples/component-hello/host.toml"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "hello from AI-direct IR\n");
 }
 
 #[test]
@@ -387,4 +401,68 @@ fn rebuild_progress_stays_off_the_application_stdout() {
         "progress belongs on stderr: {}",
         stderr(&ran)
     );
+}
+
+#[test]
+fn component_scaffold_builds_checks_and_runs() {
+    let project = scaffold_target("component-scaffold", "component");
+
+    let built = run(&project, &["build"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+
+    let checked = run(&project, &["check"]);
+    assert!(
+        checked.status.success(),
+        "check failed: {}",
+        stderr(&checked)
+    );
+    let report = stdout(&checked);
+    assert!(report.contains("wasi:cli/run@"), "{report}");
+    assert!(report.contains("all imports satisfied"), "{report}");
+
+    // The starter is a hand-written WASI 0.2 component: no bindings generator,
+    // no language toolchain, and no hand-counted string length.
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
+    assert_eq!(stdout(&ran), "hello from app\n");
+}
+
+#[test]
+fn component_artifact_is_a_component_not_a_core_module() {
+    let project = scaffold_target("component-artifact", "component");
+    assert!(run(&project, &["build"]).status.success());
+    let bytes = std::fs::read(project.join("app.wasm")).expect("read artifact");
+    // Layer 1 in the WASM preamble is what distinguishes a component.
+    assert_eq!(&bytes[..4], b"\0asm");
+    assert_eq!(&bytes[4..6], &[0x0d, 0x00], "artifact is not a component");
+}
+
+#[test]
+fn a_core_module_is_rejected_by_the_component_target() {
+    let project = scaffold_target("component-core-module", "component");
+    // A Core module where the manifest promises a component.
+    write_app(
+        &project,
+        "(module (func (export \"run\") (result i32) (i32.const 0)))\n",
+    );
+    let out = run(&project, &["build"]);
+    assert!(!out.status.success(), "a Core module must be rejected");
+    assert!(
+        stderr(&out).contains("component") || stderr(&out).contains("expected"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn component_distribution_bundles_the_host() {
+    let project = scaffold_target("component-dist", "component");
+    let out = run(&project, &["dist"]);
+    assert!(out.status.success(), "dist failed: {}", stderr(&out));
+    let dist = project.join("dist");
+    for name in ["host-rs", "host.toml", "app.wasm"] {
+        assert!(dist.join(name).is_file(), "dist is missing {name}");
+    }
+    let manifest = std::fs::read_to_string(dist.join("host.toml")).expect("read dist manifest");
+    assert!(manifest.contains("component"), "{manifest}");
 }
