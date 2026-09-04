@@ -15,11 +15,13 @@ Prerequisites: `host-rs` and `wat2wasm` (from wabt) must be on `PATH`.
 host-rs build
 host-rs check
 __RUN_COMMAND__
+host-rs dist
 ```
 
 `build` writes the `[app].path` artifact from `[app].source`. `check` validates
 the compiled module without running it. Run both after every WAT or manifest
-change.
+change. `dist` replaces the ignored `dist/` directory with a self-contained
+bundle ready to ship.
 
 __TARGET_WORKFLOW__
 

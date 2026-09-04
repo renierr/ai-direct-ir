@@ -46,6 +46,10 @@ fn main() -> Result<()> {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
             cmds::cmd_build(path)
         }
+        "dist" => {
+            let path = if arg1.is_empty() { "host.toml" } else { arg1 };
+            cmds::cmd_dist(path)
+        }
         "serve" => {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
             cmds::cmd_serve(path)

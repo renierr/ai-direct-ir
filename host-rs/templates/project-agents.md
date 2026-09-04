@@ -26,6 +26,7 @@ requested application while preserving the target runtime contract.
 host-rs build
 host-rs check
 __RUN_COMMAND__
+host-rs dist
 ```
 
 __TARGET_AGENT_CONTRACT__

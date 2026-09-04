@@ -1,4 +1,4 @@
-//! Subcommands: build / run / serve / check / inspect / init / help.
+//! Subcommands: build / dist / run / serve / check / inspect / init / help.
 
 use wasmtime::{Engine, ExternType, FuncType, Result, ValType};
 
@@ -47,6 +47,10 @@ pub fn print_help() {
             "assemble app.source into app.path; defaults to host.toml",
         ),
         (
+            "dist [manifest.toml]",
+            "create a self-contained dist/ bundle; defaults to host.toml",
+        ),
+        (
             "run [manifest.toml]",
             "link and execute a native app; defaults to host.toml",
         ),
@@ -81,6 +85,7 @@ pub fn print_help() {
         ("host-rs new myapp", "choose native or browser"),
         ("cd myapp && host-rs build", ""),
         ("host-rs check", "validate host.toml and the compiled app"),
+        ("host-rs dist", "create a shippable dist/ bundle"),
         ("host-rs run", "native project"),
         ("host-rs serve", "browser project"),
         (
@@ -195,8 +200,8 @@ pub fn cmd_build(path: &str) -> Result<()> {
         ))
     })?;
     let base = manifest_base(path);
-    let source = crate::link::join(&base, &source);
-    let output = crate::link::join(&base, &manifest.app.path);
+    let source = manifest_path(&base, &source);
+    let output = manifest_path(&base, &manifest.app.path);
     let status = std::process::Command::new("wat2wasm")
         .arg(&source)
         .arg("-o")
@@ -216,6 +221,205 @@ pub fn cmd_build(path: &str) -> Result<()> {
     }
     println!("built {} -> {}", source.display(), output.display());
     Ok(())
+}
+
+/// Create a clean, relocatable distribution beside the manifest. Native
+/// bundles include their executable host; browser bundles use browser assets.
+pub fn cmd_dist(path: &str) -> Result<()> {
+    if path == "host.toml" && !std::path::Path::new(path).is_file() {
+        return fail(
+            "no host.toml in this directory; run `host-rs dist <manifest.toml>` or change to a project directory"
+                .into(),
+        );
+    }
+    let manifest = crate::manifest::load(path)?;
+    let base = std::fs::canonicalize(manifest_base(path))?;
+    let dist = base.join("dist");
+    if dist.exists() {
+        std::fs::remove_dir_all(&dist)?;
+    }
+    std::fs::create_dir(&dist)?;
+
+    let app = copy_bundle_file(&base, &dist, &manifest.app.path)?;
+    let mut manifest_out = toml::Table::new();
+    manifest_out.insert(
+        "target".into(),
+        toml::Value::String(
+            match manifest.target {
+                Target::Native => "native",
+                Target::Browser => "browser",
+            }
+            .into(),
+        ),
+    );
+    manifest_out.insert(
+        "mode".into(),
+        toml::Value::String(
+            match manifest.mode {
+                crate::manifest::Mode::Server => "server",
+                crate::manifest::Mode::Command => "command",
+            }
+            .into(),
+        ),
+    );
+    for (key, value) in [
+        (
+            "port",
+            manifest.port.map(|v| toml::Value::Integer(v.into())),
+        ),
+        (
+            "memory_pages",
+            manifest
+                .memory_pages
+                .map(|v| toml::Value::Integer(v.into())),
+        ),
+        (
+            "workers",
+            manifest.workers.map(|v| toml::Value::Integer(v as i64)),
+        ),
+    ] {
+        if let Some(value) = value {
+            manifest_out.insert(key.into(), value);
+        }
+    }
+    if let Some(root) = &manifest.root {
+        let source = manifest_path(&base, root);
+        let name = source
+            .file_name()
+            .ok_or_else(|| wasmtime::Error::msg("root has no directory name"))?;
+        let dest = dist.join(name);
+        copy_dir(&source, &dest)?;
+        manifest_out.insert(
+            "root".into(),
+            toml::Value::String(name.to_string_lossy().into()),
+        );
+        if let Some(guest) = &manifest.guest {
+            manifest_out.insert("guest".into(), toml::Value::String(guest.clone()));
+        }
+    }
+    if manifest.target == Target::Native {
+        let mut libs = Vec::new();
+        for lib in &manifest.libs {
+            let path = copy_bundle_file(&base, &dist, &lib.path)?;
+            let mut item = toml::Table::new();
+            item.insert("path".into(), toml::Value::String(path));
+            item.insert("as".into(), toml::Value::String(lib.namespace.clone()));
+            libs.push(toml::Value::Table(item));
+        }
+        if !libs.is_empty() {
+            manifest_out.insert("libs".into(), toml::Value::Array(libs));
+        }
+        let mut bridges = Vec::new();
+        for bridge in &manifest.bridges {
+            let path = copy_bundle_file(&base, &dist, &bridge.path)?;
+            let mut item = toml::Table::new();
+            item.insert("path".into(), toml::Value::String(path));
+            item.insert("as".into(), toml::Value::String(bridge.namespace.clone()));
+            item.insert("alloc".into(), toml::Value::String(bridge.alloc.clone()));
+            let calls = bridge
+                .calls
+                .iter()
+                .map(|call| {
+                    let mut call_out = toml::Table::new();
+                    call_out.insert("as".into(), toml::Value::String(call.name.clone()));
+                    call_out.insert("func".into(), toml::Value::String(call.func.clone()));
+                    call_out.insert("in_ptr".into(), toml::Value::Integer(call.in_ptr as i64));
+                    call_out.insert("in_len".into(), toml::Value::Integer(call.in_len as i64));
+                    call_out.insert("out_ptr".into(), toml::Value::Integer(call.out_ptr as i64));
+                    call_out.insert("out_len".into(), toml::Value::Integer(call.out_len.into()));
+                    call_out.insert("max_in".into(), toml::Value::Integer(call.max_in.into()));
+                    toml::Value::Table(call_out)
+                })
+                .collect();
+            item.insert("calls".into(), toml::Value::Array(calls));
+            bridges.push(toml::Value::Table(item));
+        }
+        if !bridges.is_empty() {
+            manifest_out.insert("bridges".into(), toml::Value::Array(bridges));
+        }
+        let executable = std::env::current_exe()?;
+        let host_name = if cfg!(windows) {
+            "host-rs.exe"
+        } else {
+            "host-rs"
+        };
+        std::fs::copy(executable, dist.join(host_name))?;
+    } else {
+        for name in ["index.html", "web-host.js"] {
+            let source = base.join(name);
+            if !source.is_file() {
+                return fail(format!(
+                    "browser distribution requires `{}`",
+                    source.display()
+                ));
+            }
+            std::fs::copy(source, dist.join(name))?;
+        }
+    }
+    let mut app_out = toml::Table::new();
+    app_out.insert("path".into(), toml::Value::String(app));
+    app_out.insert("run".into(), toml::Value::String(manifest.app.run));
+    manifest_out.insert("app".into(), toml::Value::Table(app_out));
+    std::fs::write(
+        dist.join("host.toml"),
+        toml::to_string_pretty(&manifest_out)?,
+    )?;
+    println!(
+        "created {} distribution at {}",
+        if manifest.target == Target::Native {
+            "native"
+        } else {
+            "browser"
+        },
+        dist.display()
+    );
+    Ok(())
+}
+
+/// Copy a manifest-relative file under `dist/` without allowing a source path
+/// outside the project to dictate an unsafe destination path.
+fn copy_bundle_file(
+    base: &std::path::Path,
+    dist: &std::path::Path,
+    source: &str,
+) -> Result<String> {
+    let source = std::fs::canonicalize(manifest_path(base, source))?;
+    let name = source
+        .file_name()
+        .ok_or_else(|| wasmtime::Error::msg("module has no file name"))?
+        .to_string_lossy()
+        .into_owned();
+    let dest = dist.join(&name);
+    std::fs::copy(&source, &dest)?;
+    Ok(name)
+}
+
+fn copy_dir(source: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    if !source.is_dir() {
+        return fail(format!("`{}` is not a directory", source.display()));
+    }
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let child = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &child)?;
+        } else {
+            std::fs::copy(entry.path(), child)?;
+        }
+    }
+    Ok(())
+}
+
+/// Build and distribution paths always belong to their manifest, never to the
+/// caller's working directory. Linking keeps its legacy fallback separately.
+fn manifest_path(base: &std::path::Path, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
 }
 
 /// Serve a browser app from its manifest directory. Browsers require HTTP to
@@ -694,7 +898,7 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
         (
             "browser",
             "host-rs serve",
-            "`host-rs serve` hosts this directory at a localhost URL with the required\nWASM MIME type. Open that URL in a browser. `host-rs run` is not used for\nbrowser projects.",
+            "`host-rs serve` hosts this directory at a localhost URL with the required\nWASM MIME type. Open that URL in a browser. `host-rs run` is not used for\nbrowser projects. `host-rs dist` contains `index.html`, `web-host.js`, and the\ncompiled application; deploy that directory to any static web host.",
             "| `index.html` | The page containing the application canvas. |\n| `web-host.js` | Trusted browser runtime that implements the `web.*` imports. |",
             "The module exports `start()` (the `[app].run` entry). It may import only the\ndeclared `web.*` functions implemented in `web-host.js`: Canvas dimensions,\n`clear`, `fill_rect`, keyboard state, pointer coordinates, and frame scheduling.\nIf it imports `request_frame()`, it must export `frame()`. `web-host.js` owns\nbrowser events and drawing effects; WAT owns application state and behavior.",
             "Use `host-rs serve` and test the result in a browser",
@@ -704,7 +908,7 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
         (
             "native",
             "host-rs run",
-            "`host-rs run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime.",
+            "`host-rs run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime. `host-rs dist`\ncontains the `host-rs` executable, a rewritten local `host.toml`, the app,\ndeclared WASM dependencies, and any configured `root` data directory.",
             "",
             "Command applications normally export `_start()` and can use declared WASI\nstdio/files and optional `term.*` terminal calls. Server applications use\n`mode = \"server\"` and an entry such as `run(port)` or `handle(cfd)` with\n`workers = N`. Only imports implemented by the native host and configured in\n`host.toml` are available.",
             "Run `host-rs run` and exercise the expected CLI or server behavior",

@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Server,
@@ -11,7 +11,7 @@ pub enum Mode {
 
 /// The host implementation an app targets. Native remains the default so
 /// existing manifests continue to run under Wasmtime.
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Target {
     Native,

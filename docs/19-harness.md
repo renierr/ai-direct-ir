@@ -38,6 +38,7 @@ From its directory, build, validate, and run with:
 host-rs build
 host-rs check
 host-rs run
+host-rs dist
 ```
 
 Browser scaffold workflow:
@@ -46,6 +47,7 @@ Browser scaffold workflow:
 host-rs build
 host-rs check
 host-rs serve
+host-rs dist
 ```
 
 `host-rs new name` asks which host to scaffold: `native` (the default) or
@@ -65,10 +67,28 @@ intentionally omitted.
 
 Every new project also receives a baked-in `.gitignore`. It excludes generated
 WASM, Cargo and native build output, common JavaScript build directories, and
-`dist/`, which is reserved for a future distribution bundle command.
+`dist/`, which `host-rs dist` recreates as a release bundle.
 
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
 per-OS (25 MB release); the `.wasm` files are portable.
+
+## Distribution
+
+Run `host-rs build`, `host-rs check`, then `host-rs dist` from a project
+directory. `dist` is removed and recreated on each invocation and is ignored
+by the scaffold's `.gitignore`.
+
+Native distributions contain `host-rs`, a local rewritten `host.toml`, the app
+WASM, all declared library and bridge WASM files, and the configured `root`
+data directory when present. Run the shipped executable from that directory:
+
+```bash
+./host-rs run
+```
+
+Browser distributions contain `index.html`, `web-host.js`, the app WASM, and a
+local rewritten `host.toml`. Deploy `dist/` to any static web host; do not ship
+the native harness for a browser app.
 
 ## Manifest reference
 
