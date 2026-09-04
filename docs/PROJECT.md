@@ -51,6 +51,7 @@ line or a Core function index back to authored source.
 | `native` | Wasmtime, WASI Preview 1, experimental `term.*`/`net.*`, and declared Core providers. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
 | `gui` | Native egui `ui.*` host and declared Core providers. |
+| `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. No provider composition yet. |
 
 Core project-owned providers currently use experimental `[[libs]]` (shared
 memory) or `[[bridges]]` (copying adapter) manifest entries. Their exports are
@@ -97,8 +98,13 @@ literal multi-byte characters all measure correctly; an escape the harness
 cannot measure is an error rather than a guess. Named segments must place
 themselves at a literal offset, and two of them may not overlap.
 
+Named segments work in a plain `(module ...)` app and in a `(core module ...)`
+inside a component; each module's segments are checked for overlap against that
+module's own memory.
+
 Unnamed segments are untouched, so naming is the opt-in. The scaffolds, the
-`hello` and `gui-hello` examples, and the mail example use named segments;
+`hello`, `gui-hello`, and `component-hello` examples, and the mail example use
+named segments;
 `pi`, `prompts`, `prompts-raw`, and `server` still pack tables at
 hand-assigned addresses and have not been converted.
 
@@ -147,9 +153,12 @@ rebuild.
 
 ## Current Gaps
 
-- No WASI Preview 2 / Component Model application target in `host-rs`.
-- No component-aware manifest fields, component linker, Component Model
-  execution path, WIT conformance check, or component distribution workflow.
+- No WIT conformance check (`wasm-tools component targets`) in `host-rs`.
+- The `component` target runs one component. It cannot yet consume a provider
+  component, because that needs composition (see the open decision).
+- Validation-error mapping to source lines is Core-module-only in practice: a
+  component with several core modules reports the module index, but the include
+  map only tracks one function-index space per module.
 - No project-local component composition. The component text format cannot
   embed a prebuilt `.wasm`, and `wasm-tools compose` is deprecated upstream, so
   the mechanism is an open decision (see Intended Direction).
@@ -178,7 +187,28 @@ The Core `[[libs]]`, `[[bridges]]`, `ui.*`, `web.*`, `term.*`, and `net.*`
 mechanisms are experimental transitional tools, not the final public provider
 format.
 
-### What The Component Path Already Has
+### The Component Path Works
+
+**An AI can author a WASI 0.2 component by hand, in WAT, with no bindings
+generator and no language toolchain.** This was the open question behind the
+whole component plan, and it is now answered by a running program rather than
+an argument.
+
+`examples/component-hello/` is a `wasi:cli/command` component written entirely
+as component WAT: it declares the `wasi:io/error`, `wasi:io/streams`, and
+`wasi:cli/stdout` interfaces including the `output-stream` resource and the
+`stream-error` variant, lowers them into Core functions, runs ordinary Core WAT
+against them, and lifts `run` back out as `wasi:cli/run@0.2.12`. `host-rs`
+assembles, validates, instantiates, runs, and packages it. `wasm-tools validate`
+and `wasm-tools component wit` agree with the result.
+
+The premise therefore holds at the Component Model boundary, not only the Core
+one. It is not effortless: the interface declarations are far heavier than
+Preview 1's flat integer imports, and one construct took real debugging (a
+function signature must reference the *exported* type id, not the local type
+declaration it was defined from, or validation rejects the whole instance). That
+argues for `host-rs` eventually generating the boundary from a `.wit` file the
+way it now derives `$name.len` — but it is a convenience, not a prerequisite.
 
 Verified in this tree, with no new dependency:
 
@@ -190,6 +220,11 @@ Verified in this tree, with no new dependency:
   `wasmtime/component-model` and `wasmtime/async`. `wasmtime_wasi::p2` exposes
   `add_to_linker_sync`, so a synchronous component host fits the existing
   blocking design.
+
+The `component` target uses exactly these. It shares the manifest, the CLI, and
+the WAT assembler with the Core path and nothing else: `[[libs]]` and
+`[[bridges]]` are rejected for a component app, because they are Core WASM
+mechanisms with no meaning across a component boundary.
 
 Arbitrary current Core WAT still cannot call a WIT component provider by adding
 a Core linker import: WIT requires the canonical ABI and Components use a
@@ -274,20 +309,22 @@ being specification-only before more specification is written.
 
 1. Build the first provider package in `ai-direct-ir-providers`: SHA-256 with
    WIT, provenance, license notice, component artifact, hash, and a conformance
-   test. `libs/sha256/` already exists as a Rust crate, so the only new work is
-   the component and the package discipline. This falsifies the catalog's format
-   documents cheaply, before more are written against no evidence.
-2. Add an additive component-app manifest kind that accepts either a prebuilt
-   component or a `(component ...)` WAT source — the embedded parser already
-   handles both. Keep all existing Core paths intact.
-3. Add a Wasmtime Component/WASI 0.2 linker (`p2::add_to_linker_sync`) and make
-   `host-rs check`, `run`, and `dist` validate, instantiate, execute, and package
-   that component. Consume the SHA-256 provider from step 1 as the proof.
-4. Decide the composition mechanism only once step 3 needs to wire a root
-   component to a prebuilt provider binary. See The Open Composition Decision.
-5. Add a separate component consumer proof. Do not force the existing Core WAT
+   test. The provider's own component can be hand-authored the way
+   `examples/component-hello/` is, which avoids needing a Rust component
+   toolchain at all; `libs/sha256/` remains the reference implementation to
+   check the result against. This falsifies the catalog's format documents
+   cheaply, before more are written against no evidence.
+2. Decide the composition mechanism, once step 1 produces something to compose.
+   See The Open Composition Decision. This is now the only thing standing
+   between the component target and a real provider consumer.
+3. Consider generating the WASI/WIT interface boundary from a `.wit` file.
+   `examples/component-hello/` proves the boundary is writable by hand; it is
+   also the most error-prone part of an otherwise ordinary Core WAT program,
+   and it is mechanically derivable, which is the same argument that produced
+   named data segments.
+4. Add a separate component consumer proof. Do not force the existing Core WAT
    mail app to call a WIT component without an explicit component boundary.
-6. After the component path works, present SQLite candidates for approval;
+5. After the component path works, present SQLite candidates for approval;
    only then add a generic writable data capability and `mail-store` provider.
 
 ## Maintenance

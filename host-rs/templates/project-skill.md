@@ -48,6 +48,15 @@ provider, or its WIT/Component Model integration.
 - A separate Core WASM module is a provider with an explicit manifest ABI, not
   a source-file organization technique. Do not modify the harness merely
   because one application needs a library.
+- `target = "component"` runs a WASM component on WASI 0.2. Its source is a
+  `(component ...)` WAT that host-rs assembles in-process; no bindings
+  generator and no language toolchain are involved. Declare the WASI
+  interfaces you import, lower them with `canon lower`, write the logic in an
+  ordinary `(core module ...)`, and lift the entry with `canon lift`. A
+  function signature must reference the *exported* type id, not the local type
+  it was defined from, or the whole instance fails validation.
+- A component app cannot declare `[[libs]]` or `[[bridges]]`: those are Core
+  WASM mechanisms and mean nothing across a component boundary.
 - For WIT/Component Model work, define a small versioned WIT contract first;
   validate it, then verify the provider component against its declared world.
   A WIT directory is one package, so each contract needs its own directory.

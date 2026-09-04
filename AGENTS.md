@@ -49,6 +49,8 @@ generic design changes.
 - `host-rs/tests/cli.rs` — end-to-end tests that drive the real binary
 - `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `<name>.toml`;
   every manifest declares `source`, so the artifact is rebuilt from the WAT
+- `examples/component-hello/` — a hand-written WASI 0.2 command component;
+  start here for `target = "component"`
 - `examples/server/` — `server.wat`, `manifest.toml`, `www/` demo root
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` (`sha2`) and
   `libs/text-width/` (`unicode-width`) — Rust crates
@@ -62,6 +64,7 @@ cp libs/sha256/target/wasm32-wasip1/release/sha256.wasm libs/sha256/
 cargo test --manifest-path host-rs/Cargo.toml
 ./build.sh
 ./dist/host-rs check examples/server/manifest.toml
+./dist/host-rs run examples/component-hello/host.toml
 ./dist/host-rs examples/server/manifest.toml  # :8124
 echo 100 | ./dist/host-rs examples/pi/pi.toml
 ```
