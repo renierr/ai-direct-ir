@@ -2,6 +2,11 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Real Python baseline (`python3 -m http.server :8125`): WASM wins 3× seq, 8× conc
+- Same `bench.py`: Python GET / seq avg 0.72 ms / 1359 rps vs WASM single 0.22 ms / 4320 rps. 8-thread: Python 707 rps (avg 4.31 ms, one 1040 ms stall) vs WASM 5644–5756 rps. POST row err=200 expected (Python answers 501, counted as err by the script).
+- Why: the real server parses requests in pure Python, stat/open/read/closes per request, all under the GIL (hence conc collapse). Our per-request path is JIT'd machine code, no GIL. The earlier "Python faster" finding was an artifact of the canned baseline skipping all real work.
+- Standing: single-loop ceiling ~9.8k, workers-8 ~10.6k with headroom; real-Python ceiling ~1.4k.
+
 ## 2026-09-04 — Workers mode: host accept loop + N instances; ceiling mapped
 - `host-rs`: `workers = N` in manifest (default 1 = legacy in-app loop). Main thread accepts, N workers with own Store/instance run `run` as `handle(cfd)`; host closes after return; trap kills a connection, not the server. `server.wat` exports `handle` alongside `run` — same `.wasm` serves `manifest.toml` and `mt.toml`.
 - Numbers: seq single 4320/0.22ms vs workers-8 3505/0.28ms (+60µs dispatch); dual 8-thread clients aggregate 9.8k single (saturated) vs 10.6k workers (headroom). True service ~0.1ms; sequential latency carries ~0.1ms of Python client overhead.
