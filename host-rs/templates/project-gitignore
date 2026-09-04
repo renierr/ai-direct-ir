@@ -5,6 +5,7 @@ dist/
 # Resolved provider packages and app-local data/secrets are not source.
 vendor/
 data/
+build/
 config.local.toml
 .env
 *.db

@@ -211,7 +211,14 @@ fn build_if_needed(path: &str, manifest: &Manifest) -> Result<()> {
     let source = manifest_path(&base, source);
     let output = manifest_path(&base, &manifest.app.path);
     let rebuild = match (std::fs::metadata(&source), std::fs::metadata(&output)) {
-        (Ok(source), Ok(output)) => source.modified()? > output.modified()?,
+        (Ok(source_metadata), Ok(output)) => {
+            let output_time = output.modified()?;
+            let mut rebuild = source_metadata.modified()? > output_time;
+            for fragment in wat_fragments(&source)? {
+                rebuild |= std::fs::metadata(fragment)?.modified()? > output_time;
+            }
+            rebuild
+        }
         (Ok(_), Err(e)) if e.kind() == std::io::ErrorKind::NotFound => true,
         (Err(e), _) => return Err(e.into()),
         (_, Err(e)) => return Err(e.into()),
@@ -232,12 +239,64 @@ fn build_wat(path: &str, manifest: &Manifest) -> Result<()> {
     let base = manifest_base(path);
     let source = manifest_path(&base, source);
     let output = manifest_path(&base, &manifest.app.path);
-    let wasm = wat::parse_file(&source).map_err(|e| {
+    let wasm = wat::parse_str(&expand_wat(&source)?).map_err(|e| {
         wasmtime::Error::msg(format!("could not assemble `{}`: {e}", source.display()))
     })?;
     std::fs::write(&output, wasm)?;
     println!("built {} -> {}", source.display(), output.display());
     Ok(())
+}
+
+/// Expand ordered project-local WAT fragments. A root source can contain a
+/// standalone `;; @include relative/path.wat` line; fragments are inserted at
+/// that line and together still form one ordinary Core WASM module.
+fn expand_wat(root: &std::path::Path) -> Result<String> {
+    // Validate every include before reading it, including forced builds.
+    wat_fragments(root)?;
+    let source = std::fs::read_to_string(root)?;
+    let base = root.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut result = String::new();
+    for line in source.lines() {
+        if let Some(path) = line.trim().strip_prefix(";; @include ") {
+            result.push_str(&std::fs::read_to_string(base.join(path.trim()))?);
+            result.push('\n');
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    Ok(result)
+}
+
+fn wat_fragments(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
+    let source = std::fs::read_to_string(root)?;
+    let base = root.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut fragments = Vec::new();
+    for line in source.lines() {
+        let Some(path) = line.trim().strip_prefix(";; @include ") else {
+            continue;
+        };
+        let path = std::path::Path::new(path.trim());
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return fail(format!(
+                "WAT include `{}` must be project-local and relative",
+                path.display()
+            ));
+        }
+        let fragment = base.join(path);
+        if !fragment.is_file() {
+            return fail(format!(
+                "WAT include `{}` is not a file",
+                fragment.display()
+            ));
+        }
+        fragments.push(fragment);
+    }
+    Ok(fragments)
 }
 
 /// Create a clean, relocatable distribution beside the manifest. Native
@@ -841,10 +900,24 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let index = dir.join("index.html");
     let web_host = dir.join("web-host.js");
     let docs = dir.join("docs");
+    let src = dir.join("src");
+    let state = src.join("state.wat");
+    let src_readme = src.join("README.md");
+    let skills = dir.join(".agents").join("skills").join("ai-direct-ir");
+    let skill = skills.join("SKILL.md");
     let spec = docs.join("01-spec.md");
     let architecture = docs.join("02-architecture.md");
     let verification = docs.join("03-verification.md");
-    let mut files = vec![&wat, &toml, &readme, &agents, &gitignore];
+    let mut files = vec![
+        &wat,
+        &state,
+        &toml,
+        &readme,
+        &agents,
+        &gitignore,
+        &src_readme,
+        &skill,
+    ];
     if target == Target::Browser {
         files.extend([&index, &web_host]);
     }
@@ -912,10 +985,13 @@ pub fn cmd_new(name: &str) -> Result<()> {
             (starter, manifest)
         }
     };
+    std::fs::create_dir_all(&src)?;
+    std::fs::write(
+        &state,
+        ";; Application state and state-transition helpers belong here.\n",
+    )?;
     std::fs::write(&wat, starter)?;
     std::fs::write(&toml, manifest)?;
-    let manifest: Manifest = crate::manifest::load(toml.to_str().unwrap())?;
-    build_wat(toml.to_str().unwrap(), &manifest)?;
     std::fs::write(&gitignore, include_str!("../templates/project-gitignore"))?;
     std::fs::write(
         &readme,
@@ -926,6 +1002,19 @@ pub fn cmd_new(name: &str) -> Result<()> {
         ),
     )?;
     std::fs::create_dir_all(&docs)?;
+    std::fs::write(
+        &src_readme,
+        project_doc(
+            include_str!("../templates/project-src-readme.md"),
+            name,
+            &target,
+        ),
+    )?;
+    std::fs::create_dir_all(&skills)?;
+    std::fs::write(
+        &skill,
+        project_doc(include_str!("../templates/project-skill.md"), name, &target),
+    )?;
     std::fs::write(
         &spec,
         project_doc(include_str!("../templates/project-spec.md"), name, &target),
@@ -961,13 +1050,15 @@ pub fn cmd_new(name: &str) -> Result<()> {
             include_str!("../templates/browser-host.js").replace("__APPNAME__", name),
         )?;
     }
+    let manifest: Manifest = crate::manifest::load(toml.to_str().unwrap())?;
+    build_wat(toml.to_str().unwrap(), &manifest)?;
     let extra = if target == Target::Browser {
         "\n  index.html\n  web-host.js"
     } else {
         ""
     };
     println!(
-        "created {name}/:\n  {name}.wat\n  {name}.wasm\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  .gitignore{extra}\n\
+        "created {name}/:\n  {name}.wat\n  {name}.wasm\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  src/\n  .agents/skills/ai-direct-ir/\n  .gitignore{extra}\n\
          next:\n  cd {name} && host-rs check{}",
         if target == Target::Browser {
             " && host-rs serve"
@@ -1147,9 +1238,10 @@ fn browser_starter(name: &str) -> (String, String) {
          ;; web.* is the browser ABI: keep app state in WASM and drawing explicit.\n\
          \n\
          (module\n\
-         \x20 (import \"web\" \"clear\" (func $clear (param i32 i32 i32 i32)))\n\
-         \x20 (import \"web\" \"fill_rect\" (func $fill_rect (param i32 i32 i32 i32 i32 i32 i32 i32)))\n\
-         \x20 (func (export \"start\")\n\
+          \x20 (import \"web\" \"clear\" (func $clear (param i32 i32 i32 i32)))\n\
+          \x20 (import \"web\" \"fill_rect\" (func $fill_rect (param i32 i32 i32 i32 i32 i32 i32 i32)))\n\
+          \x20 ;; @include src/state.wat\n\
+          \x20 (func (export \"start\")\n\
          \x20   (call $clear (i32.const 20) (i32.const 24) (i32.const 35) (i32.const 255))\n\
          \x20   (call $fill_rect (i32.const 48) (i32.const 48) (i32.const 320) (i32.const 160)\n\
          \x20     (i32.const 67) (i32.const 151) (i32.const 255) (i32.const 255)))\n\
@@ -1174,10 +1266,11 @@ fn gui_starter(name: &str) -> (String, String) {
         ";; {name}.wat -- native egui app hosted by host-rs.\n\
          ;; The entry runs every UI frame. Strings are UTF-8 in env.memory.\n\
          (module\n\
-         \x20 (import \"env\" \"memory\" (memory 1))\n\
-         \x20 (import \"ui\" \"label\" (func $label (param i32 i32)))\n\
-         \x20 (import \"ui\" \"button\" (func $button (param i32 i32) (result i32)))\n\
-         \x20 (global $count (mut i32) (i32.const 0))\n\
+          \x20 (import \"env\" \"memory\" (memory 1))\n\
+          \x20 (import \"ui\" \"label\" (func $label (param i32 i32)))\n\
+          \x20 (import \"ui\" \"button\" (func $button (param i32 i32) (result i32)))\n\
+          \x20 ;; @include src/state.wat\n\
+          \x20 (global $count (mut i32) (i32.const 0))\n\
          \x20 (func (export \"frame\")\n\
          \x20   (call $label (i32.const 0) (i32.const {}))\n\
          \x20   (if (call $button (i32.const 32) (i32.const 9))\n\

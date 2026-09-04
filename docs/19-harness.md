@@ -82,6 +82,28 @@ prove the recorded acceptance criteria. The files are templates, not a required
 application framework: remove unused sections and add domain documents as the
 application grows.
 
+## Modular WAT Source
+
+A project compiles one root WAT source into one Core WASM application. The root
+opens the module and owns its imports, memory, exports, and source order. It can
+include project-local fragments with a standalone line:
+
+```wat
+;; @include src/views/inbox.wat
+```
+
+`host-rs build` replaces that line with the named fragment before parsing WAT.
+Fragments are ordered textual portions of the same module and must not add their
+own `(module ...)` wrapper. The automatic build gate tracks the root and every
+included fragment, rebuilding before `check`, `run`, or `dist` when any is newer
+than the generated artifact. `src/README.md` and
+`.agents/skills/ai-direct-ir/SKILL.md` are generated into every new project to
+direct agents toward feature-sized state, input, domain, view, strings, and
+provider-adapter files. The skill is generic: it covers embedded WAT assembly,
+source fragments, provider boundaries, WIT/Component Model constraints, and
+verification rather than any application's product behavior. A separate Core
+WASM module is a declared provider, not a source-organization mechanism.
+
 Every new project also receives a baked-in `.gitignore`. It excludes generated
 WASM, Cargo and native build output, common JavaScript build directories, and
 `dist/`, which `host-rs dist` recreates as a release bundle.

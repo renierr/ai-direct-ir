@@ -7,6 +7,14 @@ Use providers for mature implementations such as storage, protocols, codecs,
 and platform integration. Do not change `host-rs` merely because this app needs
 a library.
 
+## Source Structure
+
+Keep the root WAT source as the module boundary and ordered include list. Put
+feature-sized WAT fragments under `src/` by responsibility: state, input,
+domain rules, views, strings, and provider call adapters. Use one Core module
+for application source organization; create another module only for a declared
+provider with an explicit ABI.
+
 ## State
 
 - List persistent state, transient state, ownership, and recovery behavior.

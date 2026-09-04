@@ -42,11 +42,13 @@ __TARGET_WORKFLOW__
 | `__APPNAME__.wasm` | Generated artifact. Rebuild; do not edit it directly. |
 | `host.toml` | Target, entry point, and application configuration. |
 __TARGET_FILES__
+| `src/` | Modular WAT fragments and their source-layout guide. |
 | `docs/01-spec.md` | User-visible behavior, non-goals, and acceptance criteria. |
 | `docs/02-architecture.md` | State, module/provider boundaries, and capability decisions. |
 | `docs/03-verification.md` | Executable checks and manual behavior to prove. |
 | `.gitignore` | Excludes generated artifacts, local build output, and `dist/` release bundles. |
 | `AGENTS.md` | Implementation and verification rules for this application. |
+| `.agents/skills/ai-direct-ir/SKILL.md` | Generic AI workflow for WASM/WIT work in this project. |
 
 ## Application Contract
 
@@ -62,6 +64,7 @@ available WASI capability cannot solve the requirement. This is a builder-phase
 project: current host interfaces may be redesigned directly rather than carried
 forward through compatibility layers.
 
-Read `AGENTS.md` before editing. It defines the target-specific rules and the
-required verification workflow. Read and update the relevant `docs/` file
-before implementing a non-trivial behavior change.
+Read `AGENTS.md`, `src/README.md`, and `.agents/skills/ai-direct-ir/SKILL.md`
+before editing. They define the target-specific rules, source organization,
+generic WASM/WIT workflow, and required verification. Read and update the
+relevant `docs/` file before implementing a non-trivial behavior change.

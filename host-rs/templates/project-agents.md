@@ -11,6 +11,8 @@ requested application while preserving the target runtime contract.
 
 - `<app>.wat` is executable application policy, state transitions, and
   presentation behavior.
+- `src/` holds WAT fragments by responsibility; `src/README.md` defines the
+  ordered `;; @include` source composition convention.
 - `host.toml` is executable composition: target, entry point, and only locally
   available provider artifacts.
 - `docs/01-spec.md` is the requested behavior and acceptance criteria.
@@ -18,6 +20,8 @@ requested application while preserving the target runtime contract.
   sensitive data, and trust boundaries.
 - `docs/03-verification.md` is the commands and observable checks proving the
   implementation.
+- `.agents/skills/ai-direct-ir/SKILL.md` is the generic project-local workflow
+  for an AI working with WAT, WASM, WIT, and providers.
 
 Update the relevant document before or with every non-trivial change. Keep
 secrets, generated output, and local provider caches out of source control.
