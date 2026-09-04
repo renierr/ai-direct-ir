@@ -152,7 +152,7 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
 
 pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     let manifest: Manifest = crate::manifest::load(path)?;
-    build_if_needed(path, &manifest)?;
+    build_if_needed(engine, path, &manifest)?;
     if manifest.target == Target::Browser {
         return fail(format!(
             "{path} targets a browser; build it, then serve its directory and open index.html"
@@ -195,15 +195,15 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
 }
 
 /// Assemble and validate a manifest-declared WAT source without spawning WABT.
-pub fn cmd_build(path: &str) -> Result<()> {
+pub fn cmd_build(engine: &Engine, path: &str) -> Result<()> {
     let manifest = crate::manifest::load(path)?;
-    build_wat(path, &manifest)
+    build_wat(engine, path, &manifest)
 }
 
 /// Assemble only when the declared source is newer than its output, or when the
 /// output is missing. This keeps run/check/dist usable as single commands while
 /// preserving `host-rs build` as the explicit force-rebuild command.
-fn build_if_needed(path: &str, manifest: &Manifest) -> Result<()> {
+fn build_if_needed(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
     let Some(source) = &manifest.app.source else {
         return Ok(());
     };
@@ -214,7 +214,7 @@ fn build_if_needed(path: &str, manifest: &Manifest) -> Result<()> {
         (Ok(source_metadata), Ok(output)) => {
             let output_time = output.modified()?;
             let mut rebuild = source_metadata.modified()? > output_time;
-            for fragment in wat_fragments(&source)? {
+            for fragment in expand_wat(&source)?.includes {
                 rebuild |= std::fs::metadata(fragment)?.modified()? > output_time;
             }
             rebuild
@@ -224,12 +224,12 @@ fn build_if_needed(path: &str, manifest: &Manifest) -> Result<()> {
         (_, Err(e)) => return Err(e.into()),
     };
     if rebuild {
-        build_wat(path, manifest)?;
+        build_wat(engine, path, manifest)?;
     }
     Ok(())
 }
 
-fn build_wat(path: &str, manifest: &Manifest) -> Result<()> {
+fn build_wat(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
     let source = manifest.app.source.as_ref().ok_or_else(|| {
         wasmtime::Error::msg(format!(
             "{path} has no [app].source; app.path `{}` is prebuilt or has no declared WAT source",
@@ -239,64 +239,277 @@ fn build_wat(path: &str, manifest: &Manifest) -> Result<()> {
     let base = manifest_base(path);
     let source = manifest_path(&base, source);
     let output = manifest_path(&base, &manifest.app.path);
-    let wasm = wat::parse_str(&expand_wat(&source)?).map_err(|e| {
-        wasmtime::Error::msg(format!("could not assemble `{}`: {e}", source.display()))
-    })?;
+    let expanded = expand_wat(&source)?;
+    let wasm = wat::parse_str(&expanded.text)
+        .map_err(|e| assemble_error(&source, &expanded, &e.to_string()))?;
+    // Validate before writing: `build` must never leave a module behind that
+    // `check`, `dist`, or a commit would later pick up as a good artifact.
+    // Compiling (not just validating) is what reports the offending function
+    // index, which is the only handle the include map can translate.
+    wasmtime::Module::new(engine, &wasm).map_err(|e| validate_error(&source, &expanded, &e))?;
     std::fs::write(&output, wasm)?;
     println!("built {} -> {}", source.display(), output.display());
     Ok(())
 }
 
-/// Expand ordered project-local WAT fragments. A root source can contain a
-/// standalone `;; @include relative/path.wat` line; fragments are inserted at
-/// that line and together still form one ordinary Core WASM module.
-fn expand_wat(root: &std::path::Path) -> Result<String> {
-    // Validate every include before reading it, including forced builds.
-    wat_fragments(root)?;
-    let source = std::fs::read_to_string(root)?;
-    let base = root.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let mut result = String::new();
-    for line in source.lines() {
-        if let Some(path) = line.trim().strip_prefix(";; @include ") {
-            result.push_str(&std::fs::read_to_string(base.join(path.trim()))?);
-            result.push('\n');
-        } else {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
-    Ok(result)
+/// One expanded WAT source plus the origin of every emitted line, so parser and
+/// validator errors can name the file the author actually wrote.
+struct Expanded {
+    text: String,
+    /// `origins[i]` is the (file, 1-based line) that produced expanded line `i`.
+    origins: Vec<(std::path::PathBuf, usize)>,
+    /// Every transitively included fragment, for rebuild staleness checks.
+    includes: Vec<std::path::PathBuf>,
 }
 
-fn wat_fragments(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
-    let source = std::fs::read_to_string(root)?;
-    let base = root.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let mut fragments = Vec::new();
-    for line in source.lines() {
+impl Expanded {
+    /// Keep a reported line inside the map. A parser error at end of input
+    /// points one line past the last emitted line; the last line is the
+    /// honest answer there.
+    fn clamp(&self, line: usize) -> usize {
+        line.clamp(1, self.origins.len().max(1))
+    }
+
+    /// Map a 1-based line of the expanded text back to its source file.
+    fn origin(&self, line: usize) -> (std::path::PathBuf, usize) {
+        self.origins
+            .get(line.wrapping_sub(1))
+            .cloned()
+            .unwrap_or_else(|| (std::path::PathBuf::from("<expanded>"), line))
+    }
+
+    fn line_text(&self, line: usize) -> &str {
+        self.text.lines().nth(line.wrapping_sub(1)).unwrap_or("")
+    }
+}
+
+/// Expand ordered project-local WAT fragments. A source can contain a
+/// standalone `;; @include relative/path.wat` line; the fragment is inserted at
+/// that line, may itself include further fragments, and the result is still one
+/// ordinary Core WASM module. Every include path is relative to the directory
+/// of the root source, so a nested fragment reads exactly like a top-level one.
+fn expand_wat(root: &std::path::Path) -> Result<Expanded> {
+    let mut expanded = Expanded {
+        text: String::new(),
+        origins: Vec::new(),
+        includes: Vec::new(),
+    };
+    let project = root
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
+    let mut open = Vec::new();
+    expand_into(root, &project, &mut expanded, &mut open)?;
+    Ok(expanded)
+}
+
+fn expand_into(
+    file: &std::path::Path,
+    project: &std::path::Path,
+    expanded: &mut Expanded,
+    open: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    if open.contains(&key) {
+        return fail(format!(
+            "WAT include cycle: `{}` is already being expanded",
+            file.display()
+        ));
+    }
+    open.push(key);
+    let source = std::fs::read_to_string(file)?;
+    for (index, line) in source.lines().enumerate() {
         let Some(path) = line.trim().strip_prefix(";; @include ") else {
+            expanded.text.push_str(line);
+            expanded.text.push('\n');
+            expanded.origins.push((file.to_path_buf(), index + 1));
             continue;
         };
-        let path = std::path::Path::new(path.trim());
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|part| matches!(part, std::path::Component::ParentDir))
-        {
-            return fail(format!(
-                "WAT include `{}` must be project-local and relative",
-                path.display()
-            ));
-        }
-        let fragment = base.join(path);
-        if !fragment.is_file() {
-            return fail(format!(
-                "WAT include `{}` is not a file",
-                fragment.display()
-            ));
-        }
-        fragments.push(fragment);
+        let fragment = include_path(project, path.trim())?;
+        expanded.includes.push(fragment.clone());
+        expand_into(&fragment, project, expanded, open)?;
     }
-    Ok(fragments)
+    open.pop();
+    Ok(())
+}
+
+fn include_path(project: &std::path::Path, path: &str) -> Result<std::path::PathBuf> {
+    let relative = std::path::Path::new(path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return fail(format!(
+            "WAT include `{path}` must be project-local and relative"
+        ));
+    }
+    let fragment = project.join(relative);
+    if !fragment.is_file() {
+        return fail(format!(
+            "WAT include `{}` is not a file",
+            fragment.display()
+        ));
+    }
+    Ok(fragment)
+}
+
+/// Report an assembly failure against the authored fragment, not the expanded
+/// text the author never sees. Falls back to the raw parser message when the
+/// location cannot be recovered.
+fn assemble_error(root: &std::path::Path, expanded: &Expanded, message: &str) -> wasmtime::Error {
+    let Some((line, col)) = wat_location(message) else {
+        return wasmtime::Error::msg(format!(
+            "could not assemble `{}`: {message}",
+            root.display()
+        ));
+    };
+    let line = expanded.clamp(line);
+    let (file, source_line) = expanded.origin(line);
+    let reason = message.lines().next().unwrap_or(message);
+    wasmtime::Error::msg(format!(
+        "could not assemble `{}`: {reason}\n     --> {}:{source_line}:{col}\n      |\n {source_line:4} | {}\n      | {:>col$}",
+        root.display(),
+        file.display(),
+        expanded.line_text(line),
+        "^",
+    ))
+}
+
+/// Recover `line:col` from the `wat` crate's rendered error location.
+fn wat_location(message: &str) -> Option<(usize, usize)> {
+    let marker = message
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("--> "))?;
+    let mut parts = marker.rsplitn(3, ':');
+    let col = parts.next()?.trim().parse().ok()?;
+    let line = parts.next()?.trim().parse().ok()?;
+    Some((line, col))
+}
+
+/// Report a validation failure against the source line that defines the
+/// offending function. WASM validation speaks in function indices and byte
+/// offsets; the include map is the only thing that can translate that back.
+fn validate_error(
+    root: &std::path::Path,
+    expanded: &Expanded,
+    error: &wasmtime::Error,
+) -> wasmtime::Error {
+    let detail = format!("{error:#}");
+    let located = function_index(&detail)
+        .and_then(|index| function_lines(&expanded.text).get(index).copied())
+        .map(|line| (expanded.origin(line), expanded.line_text(line).to_string()));
+    let Some(((file, source_line), text)) = located else {
+        return wasmtime::Error::msg(format!("`{}` failed validation: {detail}", root.display()));
+    };
+    wasmtime::Error::msg(format!(
+        "`{}` failed validation: {detail}\n     --> {}:{source_line}\n      |\n {source_line:4} | {}",
+        root.display(),
+        file.display(),
+        text.trim_end(),
+    ))
+}
+
+/// Recover a Core WASM function index from a validator or compiler message.
+fn function_index(detail: &str) -> Option<usize> {
+    let digits = |rest: &str| -> Option<usize> {
+        rest.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .ok()
+    };
+    if let Some(index) = detail.split("function[").nth(1).and_then(digits) {
+        return Some(index);
+    }
+    detail.split("func ").nth(1).and_then(digits)
+}
+
+/// Line of every module-level function in Core WASM index order: imported
+/// functions first, then the functions defined in the module body. Comments and
+/// string literals are skipped so `(func` inside them never counts.
+fn function_lines(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut heads: Vec<&str> = Vec::new();
+    let mut imported: Vec<usize> = Vec::new();
+    let mut defined: Vec<usize> = Vec::new();
+    let mut line = 1usize;
+    let mut block = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            line += 1;
+            i += 1;
+            continue;
+        }
+        if block > 0 {
+            if bytes[i] == b'(' && bytes.get(i + 1) == Some(&b';') {
+                block += 1;
+                i += 2;
+            } else if bytes[i] == b';' && bytes.get(i + 1) == Some(&b')') {
+                block -= 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        match bytes[i] {
+            b';' if bytes.get(i + 1) == Some(&b';') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'(' if bytes.get(i + 1) == Some(&b';') => {
+                block = 1;
+                i += 2;
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'\\' => i += 2,
+                        b'"' => {
+                            i += 1;
+                            break;
+                        }
+                        b'\n' => {
+                            line += 1;
+                            i += 1;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'(' => {
+                i += 1;
+                let start = i;
+                while i < bytes.len()
+                    && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b';')
+                {
+                    i += 1;
+                }
+                let head = &text[start..i];
+                if head == "func" {
+                    match heads.as_slice() {
+                        [outer] if *outer == "module" => defined.push(line),
+                        [outer, inner] if *outer == "module" && *inner == "import" => {
+                            imported.push(line)
+                        }
+                        _ => {}
+                    }
+                }
+                heads.push(head);
+            }
+            b')' => {
+                heads.pop();
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    imported.extend(defined);
+    imported
 }
 
 /// Create a clean, relocatable distribution beside the manifest. Native
@@ -311,8 +524,8 @@ pub fn cmd_dist(path: &str) -> Result<()> {
     let manifest = crate::manifest::load(path)?;
     // A release uses current source when the manifest declares it. Prebuilt
     // modules remain valid: they have no source and are checked as supplied.
-    build_if_needed(path, &manifest)?;
     let engine = Engine::default();
+    build_if_needed(&engine, path, &manifest)?;
     cmd_check(&engine, path, &manifest)?;
     let base = std::fs::canonicalize(manifest_base(path))?;
     let dist = base.join("dist");
@@ -627,7 +840,7 @@ pub fn cmd_inspect(engine: &Engine, path: &str) -> Result<()> {
 /// Validate a manifest end-to-end without executing: links everything and
 /// verifies the entry func signature.
 pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> Result<()> {
-    build_if_needed(manifest_path, manifest)?;
+    build_if_needed(engine, manifest_path, manifest)?;
     let base = manifest_base(manifest_path);
     if manifest.target == Target::Browser {
         return check_browser(engine, manifest_path, manifest, &base);
@@ -872,7 +1085,7 @@ fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()
 /// Scaffold a full project dir plus AI-facing intent, architecture, and test docs.
 /// Templates are baked into the binary (include_str!), so a fresh project
 /// carries harness instructions and rules with it. Never overwrites.
-pub fn cmd_new(name: &str) -> Result<()> {
+pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
     if name.is_empty()
         || !name
             .bytes()
@@ -1051,7 +1264,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
         )?;
     }
     let manifest: Manifest = crate::manifest::load(toml.to_str().unwrap())?;
-    build_wat(toml.to_str().unwrap(), &manifest)?;
+    build_wat(engine, toml.to_str().unwrap(), &manifest)?;
     let extra = if target == Target::Browser {
         "\n  index.html\n  web-host.js"
     } else {
@@ -1354,4 +1567,42 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
     std::fs::write(&toml_path, &out)?;
     println!("wrote {toml_path}:\n{out}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{function_lines, wat_location};
+
+    #[test]
+    fn function_lines_follow_core_index_order() {
+        let text = "(module
+  ;; (func in a comment must not count)
+  (import \"wasi\" \"fd_write\"
+    (func $write (param i32) (result i32)))
+  (type $t (func (param i32)))
+  (func $first (result i32) (i32.const 1))
+  (data (i32.const 0) \"(func in a string)\")
+  (func $second)
+)
+";
+        // Imported functions come first in the index space, then definitions.
+        assert_eq!(function_lines(text), vec![4, 6, 8]);
+    }
+
+    #[test]
+    fn function_lines_ignore_block_comments() {
+        let text = "(module (; (func hidden) ;) (func $only))\n";
+        assert_eq!(function_lines(text), vec![1]);
+    }
+
+    #[test]
+    fn wat_location_reads_the_rendered_marker() {
+        let message = "expected `)`\n     --> <anon>:12:5\n      |\n";
+        assert_eq!(wat_location(message), Some((12, 5)));
+    }
+
+    #[test]
+    fn wat_location_tolerates_a_message_without_one() {
+        assert_eq!(wat_location("something went wrong"), None);
+    }
 }

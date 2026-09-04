@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         }
         "build" => {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
-            cmds::cmd_build(path)
+            cmds::cmd_build(&engine, path)
         }
         "dist" => {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
             if arg1.is_empty() {
                 return usage_err("missing project name", "host-rs new <name>");
             }
-            cmds::cmd_new(arg1)
+            cmds::cmd_new(&engine, arg1)
         }
         "run" => cmds::run_manifest(&engine, if arg1.is_empty() { "host.toml" } else { arg1 }),
         other => {
