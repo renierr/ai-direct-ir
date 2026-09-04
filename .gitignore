@@ -1,11 +1,12 @@
-# Build outputs — reproducible via wat2wasm / cargo / native/build.sh
+# Build outputs — reproducible via wat2wasm / cargo / native/build.sh.
+# Exception: examples/**/*.wasm are tracked as runnable distributables.
+*.wasm
+!examples/**/*.wasm
 native/gen/
 native/*-native
-lib/*.wasm
-srv/*.wasm
 host-rs/target/
-lib-sha256/target/
-lib-sha256/Cargo.lock
+libs/sha256/target/
+libs/sha256/Cargo.lock
 *.o
 *.cwasm
 

@@ -30,9 +30,18 @@ See `docs/03-wasm-runtime.md`. Summary: WASM needs a host. `wasmtime + WASI` for
 - [x] Idea сформулирована / formulated
 - [x] `hello.wat -> hello.wasm -> wasmtime run` proof of runtime (152 bytes, `wasmtime 48.0.1`, `wabt 1.0.41`, `binaryen 130`, `wasm-tools 1.257.1`; Python emitter byte-identical to `wat2wasm`)
 - [x] AI-generated WAT for pure function
-- [x] Interactive WAT app (`src/pi.wat` — stdin prompt, 0..1000 validation, spigot pi, bit-exact vs Chudnovsky at N=100/1000)
+- [x] Interactive WAT app (`examples/pi/pi.wat` — stdin prompt, 0..1000 validation, spigot pi, bit-exact vs Chudnovsky at N=100/1000)
 - [ ] AI-generated raw WASM binary + `wasm-opt`
 - [x] Native exes via wasm2c (`native/hello-native`, `native/pi-native` — no runtime, N=1000 byte-identical, see `docs/13-wasm2c-native.md`)
+- [x] Generic harness `host-rs` — TOML manifests link + host apps and libs without rebuilding (`docs/19-harness.md`); `run`/`check`/`inspect`/`init`
+- [x] Static file server in IR + finished Rust lib (`sha2` via bridge, `POST /sha256` matches `sha256sum`; see `docs/17-static-server.md`, `docs/18-cargo-libs.md`)
 - [ ] WASI Component Model target
 
-See `docs/04-roadmap.md` and `docs/05-decisions.md`.
+## Layout
+
+- `host-rs/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`net`/`link`/`cmds` modules)
+- `examples/{hello,pi,server}/` — runnable apps (WAT + tracked `.wasm` + manifest)
+- `libs/http/` — hand-written WAT lib; `libs/sha256/` — Rust crate wrapping crates.io `sha2`
+- `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/` — findings + lablog
+
+See `AGENTS.md` for build/run rules, `docs/04-roadmap.md` and `docs/05-decisions.md`.

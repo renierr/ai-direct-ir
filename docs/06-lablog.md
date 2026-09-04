@@ -2,6 +2,11 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Restructure around the harness + CLI that explains itself
+- Layout: `host-rs/src/{main,manifest,host,net,link,cmds}`, `examples/{hello,pi,server}/`, `libs/{http,sha256}/`, `tools/serve.py` (retired), `AGENTS.md` with repo rules. Examples' `.wasm` tracked as distributables; everything else generated stays ignored.
+- Harness CLI: bare `host-rs` prints help (never boots a demo); `run`/`check`/`inspect`/`init`. `inspect` shows a foreign module's imports/exports (the cross-language on-ramp); `init` scaffolds a manifest stub. Manifest paths resolve manifest-dir-first with CWD fallback — runnable from anywhere.
+- Fixes: wasmtime 48 has no `ValKind` (`ValType` displays directly, no `PartialEq`); `Caller` sees only the direct caller's exports (host keeps the Memory handle).
+
 ## 2026-09-04 — Generic harness: manifest-driven host-rs runs everything
 - Rewrote host-rs around TOML manifests (mode/libs/bridges/app); verified same binary runs server (`srv/manifest.toml`, full matrix incl. sha256), pi and hello (`src/*.toml`, exit codes via I32Exit) with zero rebuilds. Lib exports auto-wired from module metadata; shared memory sized from import minima.
 - Fixes: `MemoryType::new` takes u32 pages; manifest `memory_pages` is a floor, not the size.

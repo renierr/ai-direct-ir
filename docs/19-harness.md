@@ -6,14 +6,15 @@ exactly the "config, not code" property the user asked for.
 
 ## Run
 
-From the repo root (all paths in manifests are relative to it):
+Run from the repo root (manifest paths resolve manifest-dir first,
+process dir second):
 
 ```bash
-cargo build --release -p host-rs        # once (from host-rs/)
-host-rs srv/manifest.toml               # server mode
-host-rs src/pi.toml                     # command mode
-echo 100 | host-rs src/pi.toml
-host-rs src/hello.toml
+cargo build --release                        # from host-rs/ — once, 25 MB binary
+host-rs examples/server/manifest.toml        # server mode
+host-rs examples/pi/pi.toml                  # command mode
+echo 100 | host-rs examples/pi/pi.toml
+host-rs examples/hello/hello.toml
 ```
 
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
@@ -24,16 +25,16 @@ per-OS (25 MB release); the `.wasm` files are portable.
 ```toml
 mode = "server"      # or "command"
 port = 8124          # server mode (default 8123)
-root = "srv/www"     # optional preopen dir (WASI fd 3 when alone)
+root = "www"            # optional preopen dir (WASI fd 3 when alone)
 guest = "www"        # optional guest name (default: root's file name)
 memory_pages = 2     # optional floor; import minima always win
 
 [[libs]]             # shared-memory libs: every export auto-wired
-path = "lib/http.wasm"
+path = "libs/http/http.wasm"
 as = "lib"           # namespace the app imports from
 
 [[bridges]]          # own-memory libs: host copies buffers across
-path = "lib/sha256.wasm"
+path = "libs/sha256/sha256.wasm"
 as = "bridge"
 alloc = "sha256_alloc"
 
@@ -47,7 +48,7 @@ out_len = 64
 max_in = 7000        # optional input cap (default 1 MiB)
 
 [app]
-path = "srv/server.wasm"
+path = "server.wasm"
 run = "run"          # server: run(port); command: run() e.g. _start
 ```
 
@@ -71,9 +72,9 @@ run = "run"          # server: run(port); command: run() e.g. _start
 
 | Manifest | Mode | Modules |
 |---|---|---|
-| `srv/manifest.toml` | server :8124 | app + http lib + sha256 bridge |
-| `src/pi.toml` | command | app only (`_start`, stdio) |
-| `src/hello.toml` | command | app only |
+| `examples/server/manifest.toml` | server :8124 | app + http lib + sha256 bridge |
+| `examples/pi/pi.toml` | command | app only (`_start`, stdio) |
+| `examples/hello/hello.toml` | command | app only |
 
 ## v1 limits (extend once, all apps benefit)
 

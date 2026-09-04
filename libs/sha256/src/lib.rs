@@ -2,8 +2,8 @@
 //! WASM module. The host loads `sha256.wasm`, allocates buffers inside the
 //! LIB's own memory, calls in, and copies the digest back to the app.
 //!
-//! Build: `cargo build --release --target wasm32-wasip1`
-//! Artifact: `target/wasm32-wasip1/release/sha256.wasm` -> copy to `lib/`.
+//! Build: `cargo build --release --target wasm32-wasip1` (from libs/sha256/)
+//! Artifact: `target/wasm32-wasip1/release/sha256.wasm` -> copy to `libs/sha256/`.
 
 use sha2::{Digest, Sha256};
 

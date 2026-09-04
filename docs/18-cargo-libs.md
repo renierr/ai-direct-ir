@@ -21,7 +21,7 @@ provides syscalls. What we proved: a finished crates.io crate (`sha2`
 
 ## The two memory strategies
 
-| | Shared memory (lib/http.wasm) | Copied bridge (lib/sha256.wasm) |
+| | Shared memory (libs/http/http.wasm) | Copied bridge (libs/sha256/sha256.wasm) |
 |---|---|---|
 | Lib memory | None — uses host's | Own (Rust `std` assumes ownership) |
 | Pointers | Valid everywhere | Valid only inside the lib |
@@ -38,7 +38,7 @@ is a few microseconds — irrelevant next to TCP.
 2. Expose `#[no_mangle] pub extern "C"` fns + an allocator (ours leaks
    `Vec`s on purpose — the host owns lifetimes).
 3. `cargo build --release --target wasm32-wasip1` (needs
-   `rustup target add wasm32-wasip1`, one-time), copy to `lib/foo.wasm`.
+   `rustup target add wasm32-wasip1`, one-time), copy to `libs/foo/foo.wasm`.
 4. Host: instantiate (wasi imports already defined), stash its `Memory` +
    `TypedFunc` handles, `func_wrap` a `bridge.*` function the app imports.
 5. App (WAT): `(import "bridge" "foo" ...)` + an endpoint. Done.

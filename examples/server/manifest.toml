@@ -1,16 +1,17 @@
 # Static file server: WAT app + WAT lib + Rust bridge, one harness.
-# Run from repo root: host-rs srv/manifest.toml
+# Paths are relative to THIS file. Run from anywhere:
+#   host-rs examples/server/manifest.toml
 mode = "server"
 port = 8124
-root = "srv/www"
+root = "www"
 memory_pages = 2
 
 [[libs]]
-path = "lib/http.wasm"
+path = "../../libs/http/http.wasm"
 as = "lib"
 
 [[bridges]]
-path = "lib/sha256.wasm"
+path = "../../libs/sha256/sha256.wasm"
 as = "bridge"
 alloc = "sha256_alloc"
 
@@ -24,5 +25,5 @@ out_len = 64
 max_in = 7000
 
 [app]
-path = "srv/server.wasm"
+path = "server.wasm"
 run = "run"

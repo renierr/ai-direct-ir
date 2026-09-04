@@ -1,6 +1,0 @@
-# Pi digits CLI. Run from repo root: echo 100 | host-rs src/pi.toml
-mode = "command"
-
-[app]
-path = "src/pi.wasm"
-run = "_start"

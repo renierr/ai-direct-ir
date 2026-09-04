@@ -18,7 +18,7 @@ run 100% inside the two .wasm modules. Exit paths to drop Python entirely:
 a tiny C host via libwasmtime, or WASI 0.2 wasi:sockets (standard bind/listen
 — then `wasmtime run` needs no host code at all). See docs/17-static-server.md.
 
-Usage:  python3 srv/serve.py [port]      (www/ root, serves srv/www/)
+Usage:  python3 tools/serve.py [port]      (www/ root, serves examples/server/www/)
 Requires the wasmtime Python package (dev-machine only, NOT shipped).
 """
 import socket
@@ -44,7 +44,7 @@ I32 = ValType.i32()
 
 store = Store(Engine(Config()))
 wasi = WasiConfig()
-wasi.preopen_dir("srv/www", "www")  # single preopen -> WASI fd 3, see server.wat
+wasi.preopen_dir("examples/server/www", "www")  # single preopen -> WASI fd 3, see server.wat
 store.set_wasi(wasi)
 
 linker = Linker(store.engine)
@@ -142,11 +142,11 @@ linker.define(
 )
 
 # Lib first (needs only env.memory + net.send), then app (needs lib.* too).
-lib = linker.instantiate(store, Module.from_file(store.engine, "lib/http.wasm"))
+lib = linker.instantiate(store, Module.from_file(store.engine, "libs/http/http.wasm"))
 for name, ext in lib.exports(store).items():
     linker.define(store, "lib", name, ext)
 
-app = linker.instantiate(store, Module.from_file(store.engine, "srv/server.wasm"))
+app = linker.instantiate(store, Module.from_file(store.engine, "examples/server/server.wasm"))
 run = app.exports(store)["run"]
 
 print(f"serving srv/www/ on 127.0.0.1:{PORT} (Ctrl-C to stop)", flush=True)

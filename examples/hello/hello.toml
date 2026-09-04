@@ -1,0 +1,6 @@
+# Hello CLI. Run from anywhere: host-rs examples/hello/hello.toml
+mode = "command"
+
+[app]
+path = "hello.wasm"
+run = "_start"

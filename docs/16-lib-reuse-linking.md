@@ -17,7 +17,7 @@ linking story. Options, weakest to strongest:
    compose` link components without a custom host. Right tool when the
    ecosystem matures; overkill while we hand-write modules.
 
-## The pattern (lib/http.wasm + srv/server.wasm)
+## The pattern (libs/http/http.wasm + examples/server/server.wasm)
 
 The one hard problem: **two modules = two memories** by default, so pointers
 can't cross the boundary. Solution: the host creates ONE memory, both modules
@@ -27,15 +27,15 @@ syscalls), app second (it needs `lib.*`):
 
 ```
 host: mem = Memory(2 pages); define("env","memory",mem); define net.*;
-lib_inst = instantiate(lib/http.wasm)          # env + net.send
+lib_inst = instantiate(libs/http/http.wasm)  # env + net.send
 define each lib export under "lib"
-app_inst = instantiate(srv/server.wasm)        # env + net + wasi + lib.*
+app_inst = instantiate(examples/server/server.wasm)  # env + net + wasi + lib.*
 run(port)
 ```
 
 The lib's memory map is ABI: lib scratch `0x10000-0x17FFF`, lib data
 `0x18000+` (read-only, includes string addresses baked into length
-constants). Documented in `lib/http.wat` header; the app must respect it.
+constants). Documented in `libs/http/http.wat` header; the app must respect it.
 
 ## Gotchas found while proving it
 
