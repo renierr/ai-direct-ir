@@ -797,7 +797,7 @@ fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()
     Ok(())
 }
 
-/// Scaffold a full project dir: starter .wat + host.toml + README + AGENTS.
+/// Scaffold a full project dir plus AI-facing intent, architecture, and test docs.
 /// Templates are baked into the binary (include_str!), so a fresh project
 /// carries harness instructions and rules with it. Never overwrites.
 pub fn cmd_new(name: &str) -> Result<()> {
@@ -827,11 +827,20 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let gitignore = dir.join(".gitignore");
     let index = dir.join("index.html");
     let web_host = dir.join("web-host.js");
+    let docs = dir.join("docs");
+    let spec = docs.join("01-spec.md");
+    let architecture = docs.join("02-architecture.md");
+    let verification = docs.join("03-verification.md");
     let mut files = vec![&wat, &toml, &readme, &agents, &gitignore];
     if target == Target::Browser {
         files.extend([&index, &web_host]);
     }
     for p in files {
+        if p.exists() {
+            return fail(format!("`{}` exists, refusing to overwrite", p.display()));
+        }
+    }
+    for p in [&spec, &architecture, &verification] {
         if p.exists() {
             return fail(format!("`{}` exists, refusing to overwrite", p.display()));
         }
@@ -901,6 +910,27 @@ pub fn cmd_new(name: &str) -> Result<()> {
             &target,
         ),
     )?;
+    std::fs::create_dir_all(&docs)?;
+    std::fs::write(
+        &spec,
+        project_doc(include_str!("../templates/project-spec.md"), name, &target),
+    )?;
+    std::fs::write(
+        &architecture,
+        project_doc(
+            include_str!("../templates/project-architecture.md"),
+            name,
+            &target,
+        ),
+    )?;
+    std::fs::write(
+        &verification,
+        project_doc(
+            include_str!("../templates/project-verification.md"),
+            name,
+            &target,
+        ),
+    )?;
     std::fs::write(
         &agents,
         project_doc(
@@ -922,7 +952,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
         ""
     };
     println!(
-        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n  .gitignore{extra}\n\
+        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  .gitignore{extra}\n\
          next:\n  cd {name} && host-rs build && host-rs check{}",
         if target == Target::Browser {
             " && host-rs serve"

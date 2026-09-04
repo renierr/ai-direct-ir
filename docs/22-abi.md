@@ -23,6 +23,12 @@ The goal is a typed WIT/Component Model provider boundary. Current `[[libs]]`,
 tools, not the final public application format. Preserve a previous shape only
 when it has a concrete active consumer or an explicit release commitment.
 
+Example applications are integration drivers for this redesign. When one needs
+storage, a richer terminal, provider resolution, or another generic facility,
+improve the platform and provider catalog together. The example may break while
+that work happens. Do not preserve an inadequate interface or add an
+application-specific host shortcut just to keep an example running.
+
 The native GUI implementation is `egui` through `eframe`, currently linked
 into `host-rs`. A GUI distribution contains the harness executable and its WASM
 modules, not a separate egui runtime. It still relies on the platform's normal

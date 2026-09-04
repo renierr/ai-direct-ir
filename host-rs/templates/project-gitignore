@@ -2,6 +2,15 @@
 *.wasm
 dist/
 
+# Resolved provider packages and app-local data/secrets are not source.
+vendor/
+data/
+config.local.toml
+.env
+*.db
+*.sqlite
+*.sqlite3
+
 # Rust / Cargo outputs (including optional local WASM libraries).
 target/
 **/target/

@@ -6,6 +6,15 @@
 WASM apps and libs. Everything else (examples, libs, docs) exists to prove
 and use it. AI writes the IR (`.wat`); the harness runs it.
 
+## Repository Role
+
+This is the generic platform repository. Work here when an example application
+reveals a reusable need in composition, validation, lifecycle, packaging,
+permissions, or a truly host-owned effect. Put mature library adapters in the
+sibling `ai-direct-ir-providers` catalog and application behavior in an example
+repository such as `ai-direct-ir-example-mail`. The example may break while the
+generic design changes.
+
 ## Hard rules
 
 - **Never install, upgrade, or remove software without explicit user consent.**
@@ -20,6 +29,10 @@ and use it. AI writes the IR (`.wat`); the harness runs it.
   every host capability change. Current Core ABI and GUI/browser imports are
   experimental; replace them directly when WIT/Component Model composition is
   better. Do not add compatibility layers without a real consumer.
+- **Use example apps as integration drivers.** When an application reveals a
+  generic missing capability, improve the harness or provider composition with
+  it. Keep the application allowed to break while the experimental interface is
+  redesigned; never add an application-specific shortcut to unblock it.
 - **Generated = ignored.** Track sources (`.wat`, `.rs`, `.toml`, `.md`);
   never commit `target/`, `*.o`, or lib `*.wasm`. Exception:
   `examples/**/*.wasm` are tracked as runnable distributables.

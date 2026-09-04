@@ -7,12 +7,31 @@ The files created by `host-rs new` are a minimal working example, not a fixed
 product. Replace the starter behavior, layout, and data as needed for the
 requested application while preserving the target runtime contract.
 
+## Project Shape
+
+- `<app>.wat` is executable application policy, state transitions, and
+  presentation behavior.
+- `host.toml` is executable composition: target, entry point, and only locally
+  available provider artifacts.
+- `docs/01-spec.md` is the requested behavior and acceptance criteria.
+- `docs/02-architecture.md` is state ownership, provider/capability choices,
+  sensitive data, and trust boundaries.
+- `docs/03-verification.md` is the commands and observable checks proving the
+  implementation.
+
+Update the relevant document before or with every non-trivial change. Keep
+secrets, generated output, and local provider caches out of source control.
+
 ## Rules
 
 - Never install, upgrade, or remove software without explicit user consent.
 - Change source, not `__APPNAME__.wasm`; run `host-rs build` after WAT edits.
 - Run `host-rs check` before claiming an integration works.
 - __VERIFY_ACTION__ before claiming user-visible behavior works.
+- Keep `docs/01-spec.md` current with requested behavior and acceptance
+  criteria. Record state/provider/capability decisions in
+  `docs/02-architecture.md`; add executable and manual checks to
+  `docs/03-verification.md` before claiming a feature is complete.
 - Keep the WAT memory map current. Pointer ranges, byte lengths, and shared
   memory ownership are ABI, not incidental implementation details.
 - Read `docs/22-abi.md` in the harness repository before changing a built-in

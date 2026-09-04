@@ -17,6 +17,20 @@ Normal compiler for reference:
 
 We replace the frontend with the AI.
 
+## Three Repositories
+
+This repository is the platform. Its sibling repositories have distinct roles:
+
+| Repository | What it is for | What we do there |
+|---|---|---|
+| `ai-direct-ir` | Generic platform | Build `host-rs`: compile, compose, validate, run, and package AI-authored WASM applications. Define only generic host/runtime behavior. |
+| `ai-direct-ir-providers` | Reusable provider catalog | Adapt proven upstream libraries into reproducible WASM/WIT provider packages with provenance, licenses, hashes, and conformance tests. |
+| `ai-direct-ir-example-mail` | Integration-driving application | Build a real WAT mail client. Its needs reveal missing generic platform/provider capabilities; it may break while those are redesigned. |
+
+The application never causes a mail-specific harness API. If it needs SQLite,
+SMTP, IMAP/JMAP, a TUI, storage permissions, or provider composition, solve it
+generically here or in the provider catalog, then consume it from the app.
+
 ## Why start with WASM?
 
 See `docs/02-ir-options.md`. Summary: WASM is small (~200 opcodes), sandboxed, portable, has text form (WAT) that is LLM-friendly and binary form that is optimizable.
@@ -59,7 +73,7 @@ the target and its linker to be installed separately.
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` — Rust crate wrapping crates.io `sha2`
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/` — findings + lablog
 
-The host composition model and built-in capability contract live in
+The host composition model and experimental built-in capability contract live in
 `docs/22-abi.md`. New app libraries belong in the project's declared WASM
 providers; only a new built-in host import needs a harness ABI change.
 

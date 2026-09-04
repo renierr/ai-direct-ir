@@ -7,6 +7,14 @@ This fresh scaffold is a small, working starting-point example. Change it to
 build the requested application; its starter behavior and layout are not a
 product requirement.
 
+## AI-Agent Project Shape
+
+This project keeps different kinds of context in different files so an agent can
+change it safely: WAT contains executable application behavior, `host.toml`
+contains executable module composition, and `docs/` records intent, design
+decisions, and proof. Keep those three views synchronized; do not hide product
+requirements only in source comments or dependency details only in prose.
+
 ## Develop
 
 Prerequisites: `host-rs` and `wat2wasm` (from wabt) must be on `PATH`.
@@ -34,6 +42,9 @@ __TARGET_WORKFLOW__
 | `__APPNAME__.wasm` | Generated artifact. Rebuild; do not edit it directly. |
 | `host.toml` | Target, entry point, and application configuration. |
 __TARGET_FILES__
+| `docs/01-spec.md` | User-visible behavior, non-goals, and acceptance criteria. |
+| `docs/02-architecture.md` | State, module/provider boundaries, and capability decisions. |
+| `docs/03-verification.md` | Executable checks and manual behavior to prove. |
 | `.gitignore` | Excludes generated artifacts, local build output, and `dist/` release bundles. |
 | `AGENTS.md` | Implementation and verification rules for this application. |
 
@@ -52,4 +63,5 @@ project: current host interfaces may be redesigned directly rather than carried
 forward through compatibility layers.
 
 Read `AGENTS.md` before editing. It defines the target-specific rules and the
-required verification workflow.
+required verification workflow. Read and update the relevant `docs/` file
+before implementing a non-trivial behavior change.

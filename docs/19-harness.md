@@ -66,6 +66,22 @@ rules. Both state that the scaffold is a minimal working example for an AI to
 change into the requested application. The other target's instructions are
 intentionally omitted.
 
+Every scaffold also receives an AI-agent-oriented `docs/` starter set:
+
+| File | Agent purpose |
+|---|---|
+| `docs/01-spec.md` | User-visible flows, non-goals, and observable acceptance criteria. |
+| `docs/02-architecture.md` | WAT state, module/provider boundaries, capabilities, sensitive data, and trust decisions. |
+| `docs/03-verification.md` | Exact build/check/run/dist commands plus automated, manual, and failure checks. |
+
+This separates intent from implementation. Keep `host.toml` as executable
+composition metadata; keep product behavior in the specification; record why a
+provider or capability is needed before adding it. An agent should update the
+relevant document with every non-trivial behavior or dependency change, then
+prove the recorded acceptance criteria. The files are templates, not a required
+application framework: remove unused sections and add domain documents as the
+application grows.
+
 Every new project also receives a baked-in `.gitignore`. It excludes generated
 WASM, Cargo and native build output, common JavaScript build directories, and
 `dist/`, which `host-rs dist` recreates as a release bundle.
