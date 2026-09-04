@@ -84,6 +84,9 @@ run = "run"          # server: run(port); command: run() e.g. _start
 
 - Bridge calls are fixed-arity `(in_ptr, in_len, out_ptr) -> rc`.
 - Syscalls are TCP client/server + WASI files/stdio. No UDP/timers yet.
+- `term.*` adds an optional raw-terminal capability (key events, alternate
+  screen, cursor, size); see `docs/21-terminal.md`. It rejects pipes so apps
+  must keep an ordinary stdio fallback.
 - Single preopen dir. Single connection at a time is the *app's* choice,
   not the harness's — or set `workers` and let the host parallelize.
 

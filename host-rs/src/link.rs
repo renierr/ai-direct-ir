@@ -13,6 +13,7 @@ use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 use crate::host::{shared_mem, Host};
 use crate::manifest::{Bridge, Lib, Manifest, Mode};
 use crate::net;
+use crate::term;
 
 /// Resolve a manifest path: manifest dir wins, CWD is the fallback, so both
 /// `host-rs srv/manifest.toml` from the root and from anywhere else work.
@@ -178,6 +179,15 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
     linker.func_wrap("net", "recv", net::w_recv)?;
     linker.func_wrap("net", "send", net::w_send)?;
     linker.func_wrap("net", "close", net::w_close)?;
+
+    linker.func_wrap("term", "enter", term::w_enter)?;
+    linker.func_wrap("term", "available", term::w_available)?;
+    linker.func_wrap("term", "exit", term::w_exit)?;
+    linker.func_wrap("term", "clear", term::w_clear)?;
+    linker.func_wrap("term", "move_to", term::w_move_to)?;
+    linker.func_wrap("term", "size", term::w_size)?;
+    linker.func_wrap("term", "flush", term::w_flush)?;
+    linker.func_wrap("term", "read_key", term::w_read_key)?;
 
     for lib in &manifest.libs {
         wire_lib(&mut linker, &mut store, engine, &join(base, &lib.path), lib)?;

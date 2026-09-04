@@ -8,3 +8,4 @@ wasmtime = "48"
 wasmtime-wasi = { version = "48", features = ["p1"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+crossterm = "0.28"

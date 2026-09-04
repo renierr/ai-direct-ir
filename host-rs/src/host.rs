@@ -20,6 +20,7 @@ pub struct Host {
     pub socks: HashMap<i32, Sock>,
     pub next: i32,
     pub shared: Option<Memory>,
+    pub term_active: bool,
 }
 
 impl Host {
@@ -29,6 +30,7 @@ impl Host {
             socks: HashMap::new(),
             next: 100,
             shared: None,
+            term_active: false,
         }
     }
 
@@ -37,6 +39,14 @@ impl Host {
         self.next += 1;
         self.socks.insert(h, s);
         h
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        // A guest trap, Ctrl-C, or failed run must never strand the user's
+        // terminal in raw mode or the alternate screen.
+        crate::term::restore(self);
     }
 }
 

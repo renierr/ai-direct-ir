@@ -38,10 +38,11 @@ wat2wasm examples/prompts/prompts.wat -o examples/prompts/prompts.wasm
 printf 'demo\n2\n1,3\ny\n' | host-rs examples/prompts/prompts.toml
 ```
 
-If full terminal UI becomes a product need, first add a narrow terminal ABI to
-the harness (raw-mode enter/restore and input events), then choose whether to
-make a general Rust TUI bridge or keep a deliberately small WAT component.
-Do not compile a whole JS runtime just to reuse Clack.
+Full terminal UI is now available through the narrow `term.*` ABI
+(`docs/21-terminal.md`): raw-mode enter/restore, alternate screen, cursor,
+size, and key events. The `examples/prompts-raw/` selection proof imports it;
+the ordinary prompt example retains its pipeable line interface. Do not compile
+a whole JS runtime just to reuse Clack.
 
 ## Scaffold a new app
 

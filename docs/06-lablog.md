@@ -2,6 +2,17 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Terminal capability: raw mode, alternate screen, key events
+- User-approved `crossterm 0.28.1` added to host-rs. `term.*`: availability,
+  raw/alternate enter/exit, clear, cursor move, packed size, flush, decoded
+  key events. Host Drop cleanup restores cursor/screen/raw mode after normal
+  exit, error, or guest trap.
+- `examples/prompts-raw/`: focused WAT arrow-key select proof. Assembles and
+  `check` passes; redirected test correctly says interactive terminal required
+  and exits 2. A real TTY run remains needed to prove actual key events.
+- Existing `examples/prompts/` stays line-based and pipeable — a terminal app
+  must choose its input mode from `term.available`, not make CI depend on TTY.
+
 ## 2026-09-04 — Prompt UX example + self-explaining empty-dir scaffold
 - `examples/prompts/`: direct WAT command app using WASI stdio only: text default, numbered select/retry, comma/space multiselect/retry, confirm/cancel, named exit codes. Valid scripted runs (including retry/cancel) plus `check` green. It is intentionally line-based, not raw-terminal Clack — raw mode/key events require a capability the harness does not expose.
 - `host-rs new <name>` creates `<name>/<name>.wat`, TOML, and AGENTS.md. Template is baked with `include_str!`; strict names and never-overwrite behavior. Empty scratch-dir proof: assemble → check → run prints the generated hello exactly; rerun refuses.

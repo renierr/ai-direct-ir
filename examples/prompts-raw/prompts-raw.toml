@@ -1,0 +1,6 @@
+# Raw-key select: import `term.*`; requires an interactive terminal.
+mode = "command"
+
+[app]
+path = "prompts-raw.wasm"
+run = "_start"
