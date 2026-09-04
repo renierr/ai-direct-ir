@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Scaffolding host for the AI-direct-IR static file server.
 
+SUPERSEDED by host-rs/ (same job in Rust, no Python needed at runtime).
+Kept as the readable reference implementation of the harness pattern.
+
 SCAFFOLDING, not architecture. This file does exactly two swappable jobs:
   1. Loader: instantiates lib/http.wasm first, plugs its exports into
      srv/server.wasm's lib.* imports, both sharing ONE host-owned memory

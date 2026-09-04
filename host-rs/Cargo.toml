@@ -1,0 +1,8 @@
+[package]
+name = "host-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wasmtime = "48"
+wasmtime-wasi = { version = "48", features = ["p1"] }

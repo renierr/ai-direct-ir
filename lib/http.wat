@@ -12,6 +12,7 @@
 
 (module
   (import "env" "memory" (memory 2))
+  (export "memory" (memory 0))  ;; re-export so guests/hosts find it uniformly
   (import "net" "send"
     (func $net_send (param i32 i32 i32) (result i32)))
 
@@ -208,16 +209,31 @@
     (local $ps i32) (local $sp i32) (local $q i32)
     (local.get $blen) (i32.const 14) (i32.lt_u)
     (if (then (i32.const 1) (return)))
+    ;; method: "GET " -> 0 with path at buf+4, anything else -> 1 with path
+    ;; after the first space (so POST /sha256 carries its path too).
     (call $eq (local.get $buf) (i32.const 0x18160) (i32.const 4))
-    (i32.eqz)
-    (if (then  ;; not GET: still 0, method=1, no path
-      (i32.store (local.get $m_out) (i32.const 1))
-      (i32.store (local.get $p_out) (i32.const 0))
-      (i32.store (local.get $pl_out) (i32.const 0))
-      (i32.const 0)
-      (return)))
-    (i32.store (local.get $m_out) (i32.const 0))
-    (local.set $ps (i32.add (local.get $buf) (i32.const 4)))
+    (if
+      (then
+        (i32.store (local.get $m_out) (i32.const 0))
+        (local.set $ps (i32.add (local.get $buf) (i32.const 4))))
+      (else
+        (i32.store (local.get $m_out) (i32.const 1))
+        (local.set $ps (local.get $buf))
+        (block $f
+          (loop $s
+            (br_if $f (i32.ge_u (local.get $ps)
+              (i32.add (local.get $buf) (local.get $blen))))
+            (i32.load8_u (local.get $ps)) (i32.const 32) (i32.eq)
+            (br_if $f)
+            (local.set $ps (i32.add (local.get $ps) (i32.const 1)))
+            (br $s)))
+        (local.get $ps)
+        (i32.add (local.get $buf) (local.get $blen)) (i32.ge_u)
+        (if (then (i32.const 1) (return)))
+        (local.set $ps (i32.add (local.get $ps) (i32.const 1)))
+        (local.get $ps)
+        (i32.add (local.get $buf) (local.get $blen)) (i32.ge_u)
+        (if (then (i32.const 1) (return)))))
     ;; path must start with '/'
     (i32.load8_u (local.get $ps)) (i32.const 47) (i32.ne)
     (if (then (i32.const 1) (return)))

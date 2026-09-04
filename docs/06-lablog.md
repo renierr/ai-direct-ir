@@ -2,6 +2,12 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Python-free: Rust host + crates.io sha2 lib (POST /sha256)
+- `rustup target add wasm32-wasip1` (user-approved). `host-rs/` on wasmtime 48 (`p1::add_to_linker_sync`, `build_p1`) replaces `serve.py` — full curl matrix green, zero Python at runtime.
+- `lib-sha256/` (sha2 0.10, cdylib) bridged via host memcpy (Rust std keeps own memory); `POST /sha256` matches `sha256sum` on `abc` and a 5 KB blob. lib `parse_request` now returns paths for non-GET too.
+- Bugs: Rust `Caller` sees the DIRECT caller's exports (lib has no memory export) → host stores the Memory handle instead + lib re-exports memory; wasmtime 48 `Memory::read/write(store, offset, buf)` arg order; `Instance::exports` yields `Export` structs → wire known exports explicitly.
+- Learning: any language emitting core modules plugs in (Rust/C/TinyGo/AS/Zig yes; mainline Go JS-only; npm/PyPI no). Memory strategy is the only real question: share vs bridge-copy.
+
 ## 2026-09-04 — Static file server in IR + lib-reuse proof (lib/ + srv/)
 - Built `lib/http.wat` (response helpers) + `srv/server.wat` (accept loop, routing, WASI file serving), linked at runtime through host-owned shared memory; `srv/serve.py` provides only TCP syscalls + linking (marked scaffolding; goal stays Python-free via C host or WASI 0.2 sockets).
 - Full curl matrix green: 200s with correct MIME, 404, 403×2 traversal, 405, query-strip. Bugs found: preview1 `path_open` needs out-pointer; wasmtime-py needs `access_caller=True` + `ValType`; hand-counted MIME length 25 vs 24 poisoned headers (curl hides NUL — verify raw with `curl -i`).

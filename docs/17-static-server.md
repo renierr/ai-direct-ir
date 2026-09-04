@@ -17,39 +17,46 @@ execute inside WebAssembly. Verified with curl (matrix below).
    WASI fd 3 = srv/www/  +--------------------------------------
 ```
 
-## Why a host at all (and why it won't stay Python)
+## Host: `host-rs/` (Rust — no Python at runtime)
 
 WASI preview1 — the only stable WASI the `wasmtime` CLI speaks — has
 `sock_accept/recv/send` but **deliberately no `bind`/`listen`**, and the CLI
-can't preopen a TCP listener either. So *some* host must own TCP and link the
-two modules (see `docs/16-lib-reuse-linking.md`). `srv/serve.py` (~120 lines)
-is that host and nothing more: **scaffolding, not architecture.**
-The project goal is zero Python. Exit paths, easiest first:
+can't preopen a TCP listener either. So *some* host must own TCP and link
+the modules (see `docs/16-lib-reuse-linking.md`). That host is `host-rs/`
+(~200 lines of Rust on wasmtime 48): **scaffolding, not architecture.**
+`srv/serve.py` did the same job in Python and is retired (kept as reference).
 
-1. **Tiny C host via libwasmtime** — same 5 imports + linker, ships as one
-   small `srvhost` binary next to the `.wasm` files.
-2. **WASI 0.2 `wasi:sockets`** — standard `bind/listen/accept` for
-   components; then `wasmtime run server.wasm` needs no host code at all,
-   and our custom `net.*` ABI disappears.
+The host does exactly three things — own the ONE shared memory (`env`),
+implement five `net.*` syscalls over `std::net` sockets, link
+`lib/http.wasm` → app, plus bridge the Rust lib (below). All HTTP parsing,
+routing and file serving run 100% inside the `.wasm` modules.
+Further exit path if even this host feels heavy: WASI 0.2 `wasi:sockets`
+(standard bind/listen — then `wasmtime run` needs no host code at all,
+and our custom `net.*` ABI disappears).
 
 ## Layout
 
-- `lib/http.wat` → `lib/http.wasm` (1720 B): the "third-party" lib.
-- `srv/server.wat` → `srv/server.wasm` (1420 B): the app.
-- `srv/serve.py`: scaffolding host (dev machine only, never shipped).
+- `lib/http.wat` → `lib/http.wasm` (1720 B): the hand-written lib.
+- `lib-sha256/` → `lib/sha256.wasm` (63 KB): finished crates.io `sha2`,
+  exposed via `sha256_alloc`/`sha256_hex`, bridged by the host
+  (see `docs/18-cargo-libs.md`).
+- `srv/server.wat` → `srv/server.wasm`: the app, incl. `POST /sha256`.
+- `host-rs/`: the harness (dev + ship; one native binary + three `.wasm`).
 - `srv/www/`: demo root (`index.html`, `style.css`, `hello.txt`, `data.json`).
 - Assumes the single preopened dir lands on WASI fd 3 (true for one
-  `--dir`/preopen; breaks if you add more — then pass the fd in).
+  preopen; breaks if you add more — then pass the fd in).
 
-## Run it
+## Run it (no Python)
 
 ```bash
 wat2wasm lib/http.wat -o lib/http.wasm
 wat2wasm srv/server.wat -o srv/server.wasm
-python3 srv/serve.py 8123   # needs wasmtime pip package (dev only)
+cargo build --release --target wasm32-wasip1 -p lib-sha256  # needs target, one-time
+cp lib-sha256/target/wasm32-wasip1/release/sha256.wasm lib/
+cargo run --release -p host-rs -- 8124
 ```
 
-## Verified behavior (curl matrix, 2026-09-04)
+## Verified behavior (curl matrix, 2026-09-04, Rust host)
 
 | Request | Result |
 |---|---|
@@ -59,6 +66,10 @@ python3 srv/serve.py 8123   # needs wasmtime pip package (dev only)
 | `GET /../src/pi.wat`, `/a/../../etc/passwd` (`--path-as-is`) | 403 (curl normalizes `/../` by default — retest raw!) |
 | `POST /` | 405 |
 | `GET /hello.txt?v=2` | 200 (query stripped) |
+| `POST /sha256` body `abc` | `ba7816bf…15ad`, identical to `sha256sum` |
+| `POST /sha256` 5 KB random blob | identical to `sha256sum` |
+| `GET /sha256` | 404 (not a file; hash is POST-only) |
 
 Single connection at a time, `Connection: close`, requests must fit 8 KiB
-(else 400). Enough for a proof; keep-alive/threading are later.
+(else 400), hash bodies ≤ 7 KiB. Enough for a proof; keep-alive/threading
+are later.

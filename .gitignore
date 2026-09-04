@@ -1,8 +1,11 @@
-# Build outputs — reproducible via wat2wasm / native/build.sh
+# Build outputs — reproducible via wat2wasm / cargo / native/build.sh
 native/gen/
 native/*-native
 lib/*.wasm
 srv/*.wasm
+host-rs/target/
+lib-sha256/target/
+lib-sha256/Cargo.lock
 *.o
 *.cwasm
 

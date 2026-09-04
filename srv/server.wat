@@ -27,6 +27,11 @@
   (import "lib" "parse_request"
     (func $parse_request (param i32 i32 i32 i32 i32) (result i32)))
 
+  ;; bridge.* = finished third-party libs, memory-copied by the host.
+  ;; sha256(data_ptr, data_len, out_ptr64) -> 0 ok (app-memory pointers).
+  (import "bridge" "sha256"
+    (func $bridge_sha256 (param i32 i32 i32) (result i32)))
+
   (import "wasi_snapshot_preview1" "path_open"
     (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32)
       (result i32)))
@@ -38,9 +43,25 @@
     (func $fd_close (param i32) (result i32)))
 
   ;; $layout: 0x100 iov, 0x108 nread, 0x110 m_out, 0x114 p_out, 0x118 pl_out,
-  ;; 0x11C opened_fd,
+  ;; 0x11C opened_fd, 0x4400 sha256 hex output (64B),
   ;; 0x200 filestat(64B), 0x1000 reqbuf(8K), 0x4000 pathbuf(512B),
   ;; 0x8000 chunk(16K), 0xD000 app data. Lib owns 0x10000+.
+
+  ;; --- 1 if [a,a+n) == [b,b+n) else 0 (also exists in lib; app-side copy
+  ;; so the app never reaches into lib data for compare constants) ---
+  (func $eq (param $a i32) (param $b i32) (param $n i32) (result i32)
+    (local $i i32)
+    (local.set $i (i32.const 0))
+    (loop $l
+      (local.get $i) (local.get $n) (i32.ge_u)
+      (if (then (i32.const 1) (return)))
+      (i32.load8_u (i32.add (local.get $a) (local.get $i)))
+      (i32.load8_u (i32.add (local.get $b) (local.get $i)))
+      (i32.ne)
+      (if (then (i32.const 0) (return)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l))
+    (i32.const 1))
 
   ;; --- 1 if path contains "..", else 0 ---
   (func $has_dotdot (param $p i32) (param $n i32) (result i32)
@@ -91,6 +112,43 @@
     (call $send_all (local.get $fd) (local.get $bptr) (local.get $blen))
     (drop))
 
+  ;; --- POST /sha256: hex-digest the request body via the Rust lib ---
+  (func $hash_request (param $cfd i32) (param $n i32)
+    (local $i i32) (local $bs i32) (local $blen i32)
+    (local.set $i (i32.const 0x1000))
+    (local.set $bs (i32.const 0))
+    (block $found
+      (loop $scan
+        (br_if $found (i32.gt_u (i32.add (local.get $i) (i32.const 4))
+          (i32.add (i32.const 0x1000) (local.get $n))))
+        ;; little-endian "\r\n\r\n"
+        (i32.load (local.get $i)) (i32.const 0x0A0D0A0D) (i32.eq)
+        (if (then
+          (local.set $bs (i32.add (local.get $i) (i32.const 4)))
+          (br $found)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (local.get $bs) (i32.eqz)
+    (if (then (call $err (local.get $cfd) (i32.const 400)) (return)))
+    (local.set $blen
+      (i32.sub (i32.add (i32.const 0x1000) (local.get $n)) (local.get $bs)))
+    (local.get $blen) (i32.const 7000) (i32.gt_u)
+    (if (then (call $err (local.get $cfd) (i32.const 400)) (return)))
+    (call $bridge_sha256 (local.get $bs) (local.get $blen) (i32.const 0x4400))
+    (i32.const 0) (i32.ne)
+    (if (then (call $err (local.get $cfd) (i32.const 500)) (return)))
+    (call $send_status (local.get $cfd) (i32.const 200)) (drop)
+    (call $send_header (local.get $cfd)
+      (i32.const 0xD060) (i32.const 12)
+      (i32.const 0xD085) (i32.const 10)) (drop)
+    (call $send_clen (local.get $cfd) (i64.const 64)) (drop)
+    (call $send_header (local.get $cfd)
+      (i32.const 0xD06C) (i32.const 10)
+      (i32.const 0xD076) (i32.const 5)) (drop)
+    (call $send_crlf (local.get $cfd)) (drop)
+    (call $send_all (local.get $cfd) (i32.const 0x4400) (i32.const 64))
+    (drop))
+
   ;; --- serve one connection, then return (caller closes socket) ---
   (func $handle (param $cfd i32)
     (local $n i32) (local $rc i32) (local $method i32)
@@ -110,7 +168,13 @@
     (local.set $p (i32.load (i32.const 0x114)))
     (local.set $pl (i32.load (i32.const 0x118)))
     (local.get $method) (i32.const 0) (i32.ne)
-    (if (then (call $err (local.get $cfd) (i32.const 405)) (return)))
+    (if (then
+      ;; non-GET: only POST /sha256 is served, everything else is 405
+      (local.get $pl) (i32.const 7) (i32.eq)
+      (call $eq (local.get $p) (i32.const 0xD08F) (i32.const 7))
+      (i32.and)
+      (if (then (call $hash_request (local.get $cfd) (local.get $n)) (return)))
+      (call $err (local.get $cfd) (i32.const 405)) (return)))
     (call $has_dotdot (local.get $p) (local.get $pl))
     (if (then (call $err (local.get $cfd) (i32.const 403)) (return)))
     ;; build fs path in 0x4000: "/" -> "index.html", else strip leading "/",
@@ -210,4 +274,5 @@
   (data (i32.const 0xD076) "close")
   (data (i32.const 0xD07B) "index.html")
   (data (i32.const 0xD085) "text/plain")
+  (data (i32.const 0xD08F) "/sha256")
 )
