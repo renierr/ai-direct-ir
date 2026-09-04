@@ -10,8 +10,8 @@
 
 use std::path::Path;
 
-use wasmtime::component::{Component, Instance, Linker, ResourceTable};
-use wasmtime::{Engine, Result, Store};
+use wasmtime::component::{Component, Func, Instance, Linker, ResourceTable, types::ComponentItem};
+use wasmtime::{Engine, Result, Store, StoreContextMut};
 use wasmtime_wasi::p2;
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
@@ -23,6 +23,9 @@ use crate::manifest::Manifest;
 pub struct Host {
     ctx: WasiCtx,
     table: ResourceTable,
+    /// Set while the guest holds the terminal in raw mode, so it is restored
+    /// on the way out even if the guest forgets.
+    pub term_active: bool,
 }
 
 impl WasiView for Host {
@@ -67,7 +70,7 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
     }
     let path = join(base, &manifest.app.path);
     let bytes = std::fs::read(&path)?;
-    if !is_component(&bytes) {
+    if !crate::manifest::is_component_binary(&bytes) {
         return Err(wasmtime::Error::msg(format!(
             "{} is a Core WASM module, not a component; \
              use target = \"native\" or author a `(component ...)` source",
@@ -92,11 +95,14 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
         Host {
             ctx: builder.build(),
             table: ResourceTable::new(),
+            term_active: false,
         },
     );
 
     let mut linker = Linker::<Host>::new(engine);
     p2::add_to_linker_sync(&mut linker)?;
+    add_term_to_linker(&mut linker)?;
+    wire_providers(engine, &mut linker, &mut store, manifest, base)?;
     let instance = linker.instantiate(&mut store, &component)?;
     let entry = entry_of(engine, &component, &manifest.app.run)?;
     Ok(Linked {
@@ -104,6 +110,145 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
         instance,
         entry,
     })
+}
+
+/// The project's own terminal capability, offered to components under a WIT
+/// interface name instead of the Core `term.*` namespace. A custom host
+/// interface is not a WASI question: a component imports one exactly as it
+/// imports `wasi:io/streams`, and the harness supplies it here.
+///
+/// Only the memory-free calls are exposed. `ui.*` and `net.*` pass pointers
+/// into guest memory, which has no meaning across a component boundary; they
+/// need value-based signatures (`string`, `list<u8>`) before they can follow.
+const TERM_INTERFACE: &str = "ai-direct:host/term";
+
+fn add_term_to_linker(linker: &mut Linker<Host>) -> Result<()> {
+    let mut term = linker.instance(TERM_INTERFACE)?;
+    term.func_wrap("enter", |mut store: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::enter(&mut store.data_mut().term_active),))
+    })?;
+    term.func_wrap("exit", |mut store: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::exit(&mut store.data_mut().term_active),))
+    })?;
+    term.func_wrap("available", |_: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::available(),))
+    })?;
+    term.func_wrap("clear", |store: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::clear(store.data().term_active),))
+    })?;
+    term.func_wrap(
+        "move-to",
+        |store: StoreContextMut<'_, Host>, (x, y): (i32, i32)| {
+            Ok((crate::term::move_to(store.data().term_active, x, y),))
+        },
+    )?;
+    term.func_wrap("size", |_: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::size(),))
+    })?;
+    term.func_wrap("flush", |_: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::flush(),))
+    })?;
+    term.func_wrap("read-key", |store: StoreContextMut<'_, Host>, (): ()| {
+        Ok((crate::term::read_key(store.data().term_active)?,))
+    })?;
+    Ok(())
+}
+
+/// Instantiate each declared provider component and forward its exported
+/// functions into the application's linker.
+///
+/// This is runtime linking, not build-time composition: the application still
+/// imports the provider's interface, and `host-rs` satisfies that import by
+/// calling into an already-instantiated provider. It needs no external
+/// composer. What it does not do is fuse the two into one distributable
+/// component, and handles cannot cross the boundary, because each instance
+/// owns its own resource table. Plain values pass through untouched.
+fn wire_providers(
+    engine: &Engine,
+    linker: &mut Linker<Host>,
+    store: &mut Store<Host>,
+    manifest: &Manifest,
+    base: &Path,
+) -> Result<()> {
+    for provider in &manifest.providers {
+        let path = join(base, &provider.path);
+        let bytes = std::fs::read(&path)?;
+        if !crate::manifest::is_component_binary(&bytes) {
+            return Err(wasmtime::Error::msg(format!(
+                "provider `{}` is a Core WASM module, not a component",
+                path.display()
+            )));
+        }
+        let component = Component::new(engine, &bytes)?;
+        // A provider gets WASI and nothing else: it may not depend on the
+        // application, and provider-to-provider wiring is not supported yet.
+        let mut provider_linker = Linker::<Host>::new(engine);
+        p2::add_to_linker_sync(&mut provider_linker)?;
+        let instance = provider_linker.instantiate(&mut *store, &component)?;
+
+        // Resolve every exported function first, then define them: looking up
+        // needs the store, defining needs the linker.
+        let mut exported: Vec<(Option<String>, String, Func)> = Vec::new();
+        for (name, item) in component.component_type().exports(engine) {
+            match item.ty {
+                ComponentItem::ComponentFunc(_) => {
+                    let func = lookup(&instance, store, None, name, &path)?;
+                    exported.push((None, name.to_string(), func));
+                }
+                ComponentItem::ComponentInstance(interface) => {
+                    let outer = instance
+                        .get_export_index(&mut *store, None, name)
+                        .ok_or_else(|| lost(&path, name))?;
+                    for (func_name, func_item) in interface.exports(engine) {
+                        if !matches!(func_item.ty, ComponentItem::ComponentFunc(_)) {
+                            continue;
+                        }
+                        let func = lookup(&instance, store, Some(&outer), func_name, &path)?;
+                        exported.push((Some(name.to_string()), func_name.to_string(), func));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if exported.is_empty() {
+            return Err(wasmtime::Error::msg(format!(
+                "provider `{}` exports no functions to wire",
+                path.display()
+            )));
+        }
+        for (interface, name, func) in exported {
+            let mut target = match &interface {
+                Some(interface) => linker.instance(interface)?,
+                None => linker.root(),
+            };
+            target.func_new(&name, move |mut store, _ty, params, results| {
+                func.call(&mut store, params, results)
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn lost(path: &Path, name: &str) -> wasmtime::Error {
+    wasmtime::Error::msg(format!(
+        "provider `{}` lost export `{name}`",
+        path.display()
+    ))
+}
+
+fn lookup(
+    instance: &Instance,
+    store: &mut Store<Host>,
+    outer: Option<&wasmtime::component::ComponentExportIndex>,
+    name: &str,
+    path: &Path,
+) -> Result<Func> {
+    let index = instance
+        .get_export_index(&mut *store, outer, name)
+        .ok_or_else(|| lost(path, name))?;
+    instance
+        .get_func(&mut *store, &index)
+        .ok_or_else(|| lost(path, name))
 }
 
 /// Resolve the manifest's `run` value against the component's actual exports.
@@ -136,12 +281,6 @@ fn entry_of(engine: &Engine, component: &Component, run: &str) -> Result<Entry> 
     Ok(Entry::Command { instance })
 }
 
-/// A component binary starts with the WASM preamble and layer 1; a Core module
-/// declares layer 0. Reading it here keeps the error specific.
-fn is_component(bytes: &[u8]) -> bool {
-    bytes.len() >= 8 && bytes[..4] == *b"\0asm" && bytes[4..6] == [0x0d, 0x00]
-}
-
 /// Validate a component without executing it.
 pub fn check(engine: &Engine, manifest_path: &str, manifest: &Manifest, base: &Path) -> Result<()> {
     let mut linked = link_all(engine, manifest, base)?;
@@ -162,18 +301,19 @@ pub fn check(engine: &Engine, manifest_path: &str, manifest: &Manifest, base: &P
 /// the process reports as a non-zero exit exactly like a Core `proc_exit`.
 pub fn run(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<()> {
     let mut linked = link_all(engine, manifest, base)?;
-    match &linked.entry {
-        Entry::Command { .. } => {
-            let func = command_func(&mut linked)?;
+    let outcome = match &linked.entry {
+        Entry::Command { .. } => command_func(&mut linked).and_then(|func| {
             let (result,) = exit_aware(func.call(&mut linked.store, ()))?;
             result.map_err(|()| wasmtime::Error::msg("component run failed"))
-        }
-        Entry::Function { .. } => {
-            let func = plain_func(&mut linked)?;
+        }),
+        Entry::Function { .. } => plain_func(&mut linked).and_then(|func| {
             exit_aware(func.call(&mut linked.store, ()))?;
             Ok(())
-        }
-    }
+        }),
+    };
+    // A guest that took the terminal does not get to keep it, however it left.
+    crate::term::restore_flag(&mut linked.store.data_mut().term_active);
+    outcome
 }
 
 /// `wasi:cli/exit` unwinds through Wasmtime as an error carrying the status.
