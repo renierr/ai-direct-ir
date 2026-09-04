@@ -5,6 +5,19 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
+
+/// The repository examples are shared mutable state: a stale `.wat` makes any
+/// command rebuild the tracked `.wasm`, and two tests rebuilding the same
+/// artifact at once can read a half-written file. Tests that touch them run one
+/// at a time.
+static EXAMPLES: Mutex<()> = Mutex::new(());
+
+fn examples_lock() -> std::sync::MutexGuard<'static, ()> {
+    EXAMPLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn host_rs() -> &'static str {
     env!("CARGO_BIN_EXE_host-rs")
@@ -218,6 +231,7 @@ fn missing_includes_are_rejected() {
 
 #[test]
 fn repository_examples_check() {
+    let _shared = examples_lock();
     let repo = repo();
     let manifests = [
         "examples/hello/hello.toml",
@@ -240,6 +254,7 @@ fn repository_examples_check() {
 
 #[test]
 fn pi_example_prints_the_requested_digits() {
+    let _shared = examples_lock();
     let mut child = Command::new(host_rs())
         .args(["run", "examples/pi/pi.toml"])
         .current_dir(repo())
@@ -265,7 +280,111 @@ fn pi_example_prints_the_requested_digits() {
 
 #[test]
 fn hello_example_prints_its_greeting() {
+    let _shared = examples_lock();
     let out = run(&repo(), &["run", "examples/hello/hello.toml"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "hello from AI-direct IR\n");
+}
+
+/// Replace the scaffold's root module with `wat`.
+fn write_app(project: &Path, wat: &str) {
+    std::fs::write(project.join("app.wat"), wat).expect("write root wat");
+}
+
+/// A module that prints one named data segment, so its length is whatever the
+/// harness computed rather than whatever the author last typed.
+fn printer(text: &str) -> String {
+    format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory 1)
+  (export "memory" (memory 0))
+  (func (export "_start")
+    (i32.store (i32.const 0) (global.get $msg.ptr))
+    (i32.store (i32.const 4) (global.get $msg.len))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8))))
+  (data $msg (i32.const 0x1000) "{text}")
+)
+"#
+    )
+}
+
+#[test]
+fn named_data_segments_supply_their_own_pointer_and_length() {
+    let project = scaffold("named-data");
+    // The WAT carries an escape and a multi-byte character; neither is a byte
+    // the author counts.
+    write_app(&project, &printer(r"caf\u{e9} \1b ok\n"));
+
+    let built = run(&project, &["build"]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran), "café \u{1b} ok\n");
+}
+
+#[test]
+fn named_data_length_follows_the_text() {
+    let project = scaffold("named-data-edit");
+    write_app(&project, &printer(r"hi\n"));
+    assert!(run(&project, &["build"]).status.success());
+    assert_eq!(stdout(&run(&project, &["run"])), "hi\n");
+
+    // The only edit is the text. Nothing restates its length.
+    write_app(&project, &printer(r"a much longer greeting\n"));
+    assert!(run(&project, &["build"]).status.success());
+    assert_eq!(stdout(&run(&project, &["run"])), "a much longer greeting\n");
+}
+
+#[test]
+fn overlapping_named_data_segments_are_rejected() {
+    let project = scaffold("named-data-overlap");
+    write_app(
+        &project,
+        r#"(module
+  (memory 1)
+  (data $first (i32.const 0x1000) "0123456789")
+  (data $second (i32.const 0x1005) "collides")
+)
+"#,
+    );
+    let out = run(&project, &["build"]);
+    assert!(!out.status.success(), "overlap must be rejected");
+    assert!(stderr(&out).contains("overlaps"), "{}", stderr(&out));
+}
+
+#[test]
+fn named_data_requires_a_literal_offset() {
+    let project = scaffold("named-data-offset");
+    write_app(
+        &project,
+        r#"(module
+  (memory 1)
+  (global $base i32 (i32.const 4096))
+  (data $msg (global.get $base) "x")
+)
+"#,
+    );
+    let out = run(&project, &["build"]);
+    assert!(!out.status.success(), "a computed offset must be rejected");
+    assert!(stderr(&out).contains("literal"), "{}", stderr(&out));
+}
+
+#[test]
+fn rebuild_progress_stays_off_the_application_stdout() {
+    let project = scaffold("progress-stream");
+    write_app(&project, &printer(r"only this\n"));
+    assert!(run(&project, &["build"]).status.success());
+
+    // Rewriting the source makes it newer, so `run` rebuilds before executing.
+    write_app(&project, &printer(r"only this\n"));
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran), "only this\n");
+    assert!(
+        stderr(&ran).contains("built"),
+        "progress belongs on stderr: {}",
+        stderr(&ran)
+    );
 }

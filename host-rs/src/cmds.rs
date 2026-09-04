@@ -248,7 +248,9 @@ fn build_wat(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
     // index, which is the only handle the include map can translate.
     wasmtime::Module::new(engine, &wasm).map_err(|e| validate_error(&source, &expanded, &e))?;
     std::fs::write(&output, wasm)?;
-    println!("built {} -> {}", source.display(), output.display());
+    // Progress goes to stderr: `run`, `check`, and `dist` may rebuild first,
+    // and an app's piped stdout must stay the app's alone.
+    eprintln!("built {} -> {}", source.display(), output.display());
     Ok(())
 }
 
@@ -300,6 +302,7 @@ fn expand_wat(root: &std::path::Path) -> Result<Expanded> {
         .to_path_buf();
     let mut open = Vec::new();
     expand_into(root, &project, &mut expanded, &mut open)?;
+    append_data_globals(&mut expanded)?;
     Ok(expanded)
 }
 
@@ -397,7 +400,7 @@ fn validate_error(
 ) -> wasmtime::Error {
     let detail = format!("{error:#}");
     let located = function_index(&detail)
-        .and_then(|index| function_lines(&expanded.text).get(index).copied())
+        .and_then(|index| scan_module(&expanded.text).functions.get(index).copied())
         .map(|line| (expanded.origin(line), expanded.line_text(line).to_string()));
     let Some(((file, source_line), text)) = located else {
         return wasmtime::Error::msg(format!("`{}` failed validation: {detail}", root.display()));
@@ -425,14 +428,45 @@ fn function_index(detail: &str) -> Option<usize> {
     detail.split("func ").nth(1).and_then(digits)
 }
 
-/// Line of every module-level function in Core WASM index order: imported
-/// functions first, then the functions defined in the module body. Comments and
-/// string literals are skipped so `(func` inside them never counts.
-fn function_lines(text: &str) -> Vec<usize> {
+/// A named module-level data segment, plus the byte range of its whole form.
+struct DataSegment {
+    name: String,
+    line: usize,
+    start: usize,
+    end: usize,
+}
+
+/// One pass over a WAT module: enough structure to translate validator output
+/// and to generate the address/length globals for named data segments.
+/// Comments and string literals are skipped, so `(func` or `(data` inside them
+/// never counts.
+struct Scan {
+    /// Source line of every module-level function in Core WASM index order:
+    /// imported functions first, then the functions defined in the body.
+    functions: Vec<usize>,
+    data: Vec<DataSegment>,
+    /// Byte index of the paren that closes the outermost form.
+    close: Option<usize>,
+}
+
+/// A form the scanner has entered but not yet left.
+struct Frame<'a> {
+    head: &'a str,
+    name: Option<String>,
+    line: usize,
+    start: usize,
+}
+
+fn scan_module(text: &str) -> Scan {
     let bytes = text.as_bytes();
-    let mut heads: Vec<&str> = Vec::new();
+    let mut open: Vec<Frame<'_>> = Vec::new();
     let mut imported: Vec<usize> = Vec::new();
     let mut defined: Vec<usize> = Vec::new();
+    let mut scan = Scan {
+        functions: Vec::new(),
+        data: Vec::new(),
+        close: None,
+    };
     let mut line = 1usize;
     let mut block = 0usize;
     let mut i = 0usize;
@@ -482,34 +516,241 @@ fn function_lines(text: &str) -> Vec<usize> {
                 }
             }
             b'(' => {
-                i += 1;
                 let start = i;
-                while i < bytes.len()
-                    && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b';')
-                {
-                    i += 1;
-                }
-                let head = &text[start..i];
+                i += 1;
+                let head = &text[i..i + token_len(&bytes[i..])];
+                i += head.len();
+                let at_module_level = matches!(open.as_slice(), [outer] if outer.head == "module");
                 if head == "func" {
-                    match heads.as_slice() {
-                        [outer] if *outer == "module" => defined.push(line),
-                        [outer, inner] if *outer == "module" && *inner == "import" => {
+                    match open.as_slice() {
+                        [outer] if outer.head == "module" => defined.push(line),
+                        [outer, inner] if outer.head == "module" && inner.head == "import" => {
                             imported.push(line)
                         }
                         _ => {}
                     }
                 }
-                heads.push(head);
+                // Only a named module-level segment opts in to generated globals.
+                let name = if head == "data" && at_module_level {
+                    identifier(text, &bytes[i..], i)
+                } else {
+                    None
+                };
+                open.push(Frame {
+                    head,
+                    name,
+                    line,
+                    start,
+                });
             }
             b')' => {
-                heads.pop();
+                if let Some(frame) = open.pop() {
+                    if let Some(name) = frame.name {
+                        scan.data.push(DataSegment {
+                            name,
+                            line: frame.line,
+                            start: frame.start,
+                            end: i,
+                        });
+                    }
+                    if open.is_empty() && scan.close.is_none() {
+                        scan.close = Some(i);
+                    }
+                }
                 i += 1;
             }
             _ => i += 1,
         }
     }
     imported.extend(defined);
-    imported
+    scan.functions = imported;
+    scan
+}
+
+/// Length of the token starting at `bytes[0]`, stopping at any WAT delimiter.
+fn token_len(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .position(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b';' | b'"'))
+        .unwrap_or(bytes.len())
+}
+
+/// The `$name` immediately following a form's head keyword, if there is one.
+fn identifier(text: &str, rest: &[u8], offset: usize) -> Option<String> {
+    let skipped = rest.iter().position(|b| !b.is_ascii_whitespace())?;
+    if rest[skipped] != b'$' {
+        return None;
+    }
+    let start = offset + skipped;
+    let len = token_len(&rest[skipped..]);
+    Some(text[start..start + len].to_string())
+}
+
+/// Named data segments are the one place authored WAT carries a hand-maintained
+/// byte count, and a stale count truncates output without ever failing
+/// validation. For every `(data $name (i32.const <addr>) "...")` the harness
+/// appends `$name.ptr` and `$name.len` globals, so the author reads the length
+/// instead of restating it. Unnamed segments are untouched.
+fn append_data_globals(expanded: &mut Expanded) -> Result<()> {
+    let scan = scan_module(&expanded.text);
+    if scan.data.is_empty() {
+        return Ok(());
+    }
+    let Some(close) = scan.close else {
+        return fail("named data segments need a closed `(module ...)` form".into());
+    };
+
+    let mut generated = String::new();
+    let mut origins = Vec::new();
+    let mut placed: Vec<(&str, u32, u32)> = Vec::new();
+    for segment in &scan.data {
+        let form = &expanded.text[segment.start..=segment.end];
+        let (file, line) = expanded.origin(segment.line);
+        let described = format!("{} at {}:{line}", segment.name, file.display());
+        let address = data_address(form, &described)?;
+        let length = data_length(form, &described)?;
+        for (other, other_address, other_length) in &placed {
+            if address < other_address + other_length && *other_address < address + length {
+                return fail(format!(
+                    "data segment `{}` overlaps `{other}`: {address}..{} vs {other_address}..{}",
+                    segment.name,
+                    address + length,
+                    other_address + other_length
+                ));
+            }
+        }
+        placed.push((&segment.name, address, length));
+        generated.push_str(&format!(
+            "  (global {name}.ptr i32 (i32.const {address})) (global {name}.len i32 (i32.const {length}))\n",
+            name = segment.name,
+        ));
+        origins.push((file, line));
+    }
+
+    // Insert at the closing paren's exact byte, never at a line boundary: a
+    // line boundary can fall inside a multi-line form.
+    let line_of_close = expanded.text[..close].matches('\n').count() + 1;
+    expanded.text = format!(
+        "{}\n{generated}{}",
+        &expanded.text[..close],
+        &expanded.text[close..]
+    );
+    // The closing paren's line becomes a prefix line, the generated lines, and
+    // a remainder line; prefix and remainder keep the original origin.
+    let carried = expanded.origin(line_of_close);
+    origins.push(carried);
+    expanded
+        .origins
+        .splice(line_of_close..line_of_close, origins);
+    Ok(())
+}
+
+/// The literal address of a data segment. A named segment must place itself at
+/// a constant, because the generated `.ptr` global has to hold that constant.
+fn data_address(form: &str, described: &str) -> Result<u32> {
+    let Some(rest) = form.split("i32.const").nth(1) else {
+        return fail(format!(
+            "data segment `{described}` needs a literal `(i32.const <addr>)` offset"
+        ));
+    };
+    let token: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == 'x')
+        .filter(|c| *c != '_')
+        .collect();
+    let parsed = match token.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => token.parse(),
+    };
+    parsed.map_err(|_| {
+        wasmtime::Error::msg(format!(
+            "data segment `{described}` has an offset `{token}` that is not a literal i32"
+        ))
+    })
+}
+
+/// Decoded byte length of every string literal in a data segment.
+fn data_length(form: &str, described: &str) -> Result<u32> {
+    let bytes = form.as_bytes();
+    let mut total = 0u32;
+    let mut i = 0usize;
+    let mut block = 0usize;
+    while i < bytes.len() {
+        if block > 0 {
+            if bytes[i] == b'(' && bytes.get(i + 1) == Some(&b';') {
+                block += 1;
+                i += 2;
+            } else if bytes[i] == b';' && bytes.get(i + 1) == Some(&b')') {
+                block -= 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        match bytes[i] {
+            b';' if bytes.get(i + 1) == Some(&b';') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'(' if bytes.get(i + 1) == Some(&b';') => {
+                block = 1;
+                i += 2;
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    let (bytes_used, produced) = escape_len(&bytes[i..], described)?;
+                    i += bytes_used;
+                    total += produced;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok(total)
+}
+
+/// How many source bytes one character of a WAT string literal consumes, and
+/// how many bytes it contributes to the segment. The escape set is closed: an
+/// unrecognised escape is a lex error, so refusing here beats guessing a length.
+fn escape_len(rest: &[u8], described: &str) -> Result<(usize, u32)> {
+    if rest[0] != b'\\' {
+        return Ok((1, 1));
+    }
+    match rest.get(1) {
+        Some(b't' | b'n' | b'r' | b'"' | b'\'' | b'\\') => Ok((2, 1)),
+        Some(b'u') => {
+            let close = rest
+                .iter()
+                .position(|b| *b == b'}')
+                .ok_or_else(|| unknown_escape(described))?;
+            let hex =
+                std::str::from_utf8(&rest[3..close]).map_err(|_| unknown_escape(described))?;
+            let scalar =
+                u32::from_str_radix(hex.trim(), 16).map_err(|_| unknown_escape(described))?;
+            let ch = char::from_u32(scalar).ok_or_else(|| unknown_escape(described))?;
+            Ok((close + 1, ch.len_utf8() as u32))
+        }
+        Some(digit) if digit.is_ascii_hexdigit() => {
+            if rest.get(2).is_some_and(u8::is_ascii_hexdigit) {
+                Ok((3, 1))
+            } else {
+                Err(unknown_escape(described))
+            }
+        }
+        _ => Err(unknown_escape(described)),
+    }
+}
+
+fn unknown_escape(described: &str) -> wasmtime::Error {
+    wasmtime::Error::msg(format!(
+        "data segment `{described}` has an escape this harness cannot measure; \
+         a named segment's length must be exact"
+    ))
 }
 
 /// Create a clean, relocatable distribution beside the manifest. Native
@@ -1159,6 +1400,9 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
          ;; WASI stdio, `_start` entry, `proc_exit` code is the exit code.\n\
          ;; Need sockets, shared libs, or bridges? New needs go in the\n\
          ;; manifest (TOML), never in harness code.\n\
+         ;;\n\
+         ;; A named data segment gets $name.ptr and $name.len from host-rs.\n\
+         ;; Never write a string length by hand: it silently goes stale.\n\
          \n\
          (module\n\
          \x20 (import \"wasi_snapshot_preview1\" \"fd_write\"\n\
@@ -1169,21 +1413,19 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
          \x20 (export \"memory\" (memory 0))\n\
          \n\
          \x20 (func (export \"_start\")\n\
-         \x20   (i32.store (i32.const 0) (i32.const 0x1000))\n\
-         \x20   (i32.store (i32.const 4) (i32.const {hlen}))\n\
+         \x20   (i32.store (i32.const 0) (global.get $hello.ptr))\n\
+         \x20   (i32.store (i32.const 4) (global.get $hello.len))\n\
          \x20   (call $fd_write (i32.const 1) (i32.const 0)\n\
          \x20     (i32.const 1) (i32.const 8))\n\
          \x20   (drop)\n\
          \x20   (call $exit (i32.const 0))\n\
          \x20   (unreachable))\n\
          \n\
-         \x20 (data (i32.const 0x1000) \"{hello}\")\n\
+         \x20 (data $hello (i32.const 0x1000) \"{hello}\")\n\
          )\n",
                 name = name,
-                // WAT string syntax needs an escaped newline, not a literal one;
-                // otherwise the byte count includes a byte absent from the data.
-                hello = hello.escape_default(),
-                hlen = hello.len()
+                // WAT string syntax needs an escaped newline, not a literal one.
+                hello = hello.escape_default()
             );
             let manifest = format!(
                 "# {name}: command-mode app. Build, check, then run:\n\
@@ -1474,10 +1716,11 @@ fn browser_starter(name: &str) -> (String, String) {
 }
 
 fn gui_starter(name: &str) -> (String, String) {
-    let hello = format!("Hello from {name}");
     let starter = format!(
         ";; {name}.wat -- native egui app hosted by host-rs.\n\
          ;; The entry runs every UI frame. Strings are UTF-8 in env.memory.\n\
+         ;; A named data segment gets $name.ptr and $name.len from host-rs, so\n\
+         ;; no string length is ever written by hand.\n\
          (module\n\
           \x20 (import \"env\" \"memory\" (memory 1))\n\
           \x20 (import \"ui\" \"label\" (func $label (param i32 i32)))\n\
@@ -1485,15 +1728,14 @@ fn gui_starter(name: &str) -> (String, String) {
           \x20 ;; @include src/state.wat\n\
           \x20 (global $count (mut i32) (i32.const 0))\n\
          \x20 (func (export \"frame\")\n\
-         \x20   (call $label (i32.const 0) (i32.const {}))\n\
-         \x20   (if (call $button (i32.const 32) (i32.const 9))\n\
+         \x20   (call $label (global.get $title.ptr) (global.get $title.len))\n\
+         \x20   (if (call $button (global.get $increment.ptr) (global.get $increment.len))\n\
          \x20     (then (global.set $count (i32.add (global.get $count) (i32.const 1)))))\n\
-         \x20   (call $label (i32.const 48) (i32.const 15)))\n\
-         \x20 (data (i32.const 0) \"Hello from {name}\")\n\
-         \x20 (data (i32.const 32) \"Increment\")\n\
-         \x20 (data (i32.const 48) \"Button is ready\")\n\
-         )\n",
-        hello.len()
+         \x20   (call $label (global.get $status.ptr) (global.get $status.len)))\n\
+         \x20 (data $title (i32.const 0) \"Hello from {name}\")\n\
+         \x20 (data $increment (i32.const 256) \"Increment\")\n\
+         \x20 (data $status (i32.const 512) \"Button is ready\")\n\
+         )\n"
     );
     let manifest = format!(
         "# {name}: native egui GUI app.\n\
@@ -1571,10 +1813,10 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{function_lines, wat_location};
+    use super::{data_address, data_length, scan_module, wat_location};
 
     #[test]
-    fn function_lines_follow_core_index_order() {
+    fn scanned_functions_follow_core_index_order() {
         let text = "(module
   ;; (func in a comment must not count)
   (import \"wasi\" \"fd_write\"
@@ -1586,13 +1828,68 @@ mod tests {
 )
 ";
         // Imported functions come first in the index space, then definitions.
-        assert_eq!(function_lines(text), vec![4, 6, 8]);
+        assert_eq!(scan_module(text).functions, vec![4, 6, 8]);
     }
 
     #[test]
-    fn function_lines_ignore_block_comments() {
+    fn scanned_functions_ignore_block_comments() {
         let text = "(module (; (func hidden) ;) (func $only))\n";
-        assert_eq!(function_lines(text), vec![1]);
+        assert_eq!(scan_module(text).functions, vec![1]);
+    }
+
+    #[test]
+    fn scanned_data_segments_are_named_and_bounded() {
+        let text = "\
+(module
+  (data (i32.const 0) \"unnamed stays untouched\")
+  (data $banner (i32.const 4096) \"hi\")
+)
+";
+        let scan = scan_module(text);
+        assert_eq!(scan.data.len(), 1, "only a named segment opts in");
+        assert_eq!(scan.data[0].name, "$banner");
+        assert_eq!(scan.data[0].line, 3);
+        let form = &text[scan.data[0].start..=scan.data[0].end];
+        assert_eq!(form, "(data $banner (i32.const 4096) \"hi\")");
+    }
+
+    #[test]
+    fn data_addresses_accept_decimal_and_hex() {
+        assert_eq!(
+            data_address("(data $a (i32.const 1024) \"x\")", "a").unwrap(),
+            1024
+        );
+        assert_eq!(
+            data_address("(data $a (i32.const 0x1000) \"x\")", "a").unwrap(),
+            4096
+        );
+        assert!(data_address("(data $a (global.get $base) \"x\")", "a").is_err());
+    }
+
+    #[test]
+    fn data_lengths_count_decoded_bytes() {
+        let count = |form: &str| data_length(form, "seg").unwrap();
+        assert_eq!(count("(data $a (i32.const 0) \"abc\")"), 3);
+        // Concatenated literals are one segment.
+        assert_eq!(count("(data $a (i32.const 0) \"ab\" \"c\")"), 3);
+        // Escapes are one byte each, whatever their source length.
+        assert_eq!(count("(data $a (i32.const 0) \"a\\nb\\tc\")"), 5);
+        assert_eq!(count("(data $a (i32.const 0) \"\\1b[0m\")"), 4);
+        assert_eq!(count("(data $a (i32.const 0) \"\\\"\\\\\")"), 2);
+        // Multi-byte characters count as their UTF-8 length, written either way.
+        assert_eq!(count("(data $a (i32.const 0) \"\u{25c6}\")"), 3);
+        assert_eq!(count("(data $a (i32.const 0) \"\\u{25c6}\")"), 3);
+        // A comment inside the form contributes nothing, quotes included.
+        assert_eq!(
+            count("(data $a (i32.const 0) ;; \"not data\"\n  \"ok\")"),
+            2
+        );
+    }
+
+    #[test]
+    fn unmeasurable_escapes_are_refused_rather_than_guessed() {
+        assert!(data_length("(data $a (i32.const 0) \"\\q\")", "seg").is_err());
+        assert!(data_length("(data $a (i32.const 0) \"\\f\")", "seg").is_err());
     }
 
     #[test]
