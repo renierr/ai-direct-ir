@@ -1,9 +1,14 @@
 # Host ABI contract
 
-`host-rs` is a capability host. WAT modules do not link directly to Rust
-crates, browser APIs, or OS libraries. They import this ABI; the selected host
-target implements and validates those imports. This document is the normative
-contract for every `host-rs` release and every generated project.
+`host-rs` loads, composes, validates, and packages AI-authored Core WASM
+applications. It is not the catalog of application libraries. A project can
+declare any number of WASM providers in its manifest and import their exports
+under project-owned namespaces. Built-in host imports are only the small set of
+effects that need a native or browser implementation.
+
+This document is the normative contract for built-in host imports. A
+project-owned provider's module exports are its contract; `host-rs check`
+proves that the complete declared graph links before an app runs or ships.
 
 ## Versioning and compatibility
 
@@ -13,9 +18,8 @@ The ABI is currently **v1**. A module identifies its target with `target` in
 
 - Existing import names, parameter/result types, memory representation, and
   documented semantics never change in v1.
-- Adding a new import is backward-compatible. It must be implemented,
-  validated by `host-rs check`, documented here, and covered by an executable
-  example or test before release.
+- Adding a built-in host import is backward-compatible. It must be implemented,
+  documented here, and covered by an executable example or test before release.
 - A breaking change requires a new namespace/version (for example `ui_v2`) or
   a new major harness release with a migration path. Do not repurpose an
   existing import.
@@ -26,7 +30,7 @@ The ABI is currently **v1**. A module identifies its target with `target` in
   harness patch/minor releases may add/fix capabilities without breaking v1.
 
 Generated projects should record the minimum harness version they have tested
-in their README when they depend on a newly added import.
+in their README when they depend on a newly added built-in import.
 
 The native GUI implementation is `egui` through `eframe`, currently linked
 into `host-rs`. A GUI distribution contains the harness executable and its WASM
@@ -41,25 +45,47 @@ application dependencies to bundle.
 - Text is UTF-8 stored in the module's declared `env.memory`.
 - The host bounds-checks every range before reading it. Invalid ranges or
   invalid UTF-8 fail the host call; they never expose host memory.
-- The guest owns its memory and application state. The host owns windows,
-  browser objects, operating-system handles, and capability state.
-- Calls must not provide arbitrary code, shell commands, JavaScript, native
-  pointers, or unrestricted filesystem paths as an escape hatch.
+- The host owns windows, browser objects, operating-system handles, and the
+  permissions it grants to WASI or built-in host calls.
 
-## Target capability matrix
+## Composition model
+
+`[[libs]]` and `[[bridges]]` are project-owned providers, not harness features
+to extend per library. A provider may export any Core WASM function, memory,
+table, or global under its declared `as` namespace. Applications and providers
+may themselves import other declared providers, WASI, or a documented built-in
+host capability. The linker resolves the graph and fails on every missing name
+or incompatible type.
+
+Use a `[[libs]]` provider when its memory can be shared with the app. Use a
+`[[bridges]]` provider when it owns memory and matches the documented copying
+call shape. This lets an AI add pure computation, codecs, parsers, databases
+compiled to WASM, protocol stacks, and any other WASM library without changing
+`host-rs`.
+
+The Core WASM model cannot directly load an arbitrary `.so`, `.dll`, Python
+package, Java JAR, or system SDK. Such a dependency needs a provider adapter:
+a WASM build of the library where possible, or a future project-shipped native
+plugin/sidecar provider. That is an application packaging concern, not a reason
+to add library-specific imports to the harness. The planned Component Model
+target will use WIT/WASI interfaces for typed provider composition.
+
+## Built-in host capabilities
 
 | Capability | `native` | `browser` | `gui` |
 |---|---|---|---|
-| WASI preview1 | Yes | No | No |
-| `term.*` | Yes | No | No |
-| `net.*` | Yes | No | No |
+| WASI preview1 | Yes | No | Yes |
+| `term.*` | Yes | No | Yes |
+| `net.*` | Yes | No | Yes |
 | `web.*` | No | Yes | No |
 | `ui.*` | No | No | Yes |
 | `[[libs]]` | Yes | No | Yes |
-| `[[bridges]]` | Yes | No | No |
+| `[[bridges]]` | Yes | No | Yes |
 
-`host-rs check` is the authority. Imports outside the selected target's table
-are rejected before an app is run or distributed.
+The table identifies built-in host implementations, not an import allowlist for
+native or GUI projects. `host-rs check` validates by linking declared modules.
+Browser projects remain tied to their generated browser host until browser-side
+provider composition is implemented.
 
 ## GUI ABI v1
 
@@ -68,13 +94,11 @@ by egui. The configured zero-argument `[app].run` export is called once per UI
 frame. The guest emits controls in call order; it keeps all application state
 in WASM globals or memory.
 
-GUI projects use `mode = "command"` and a shared `env.memory`. They may link
-declared `[[libs]]` modules, allowing AI-authored or independently-produced
-WASM libraries to provide pure computation and reusable application behavior.
-GUI libraries may import only `env.memory` and documented `ui.*` functions;
-they cannot bypass the host with WASI, terminal, network, browser, or bridge
-imports. GUI projects may not use WASI, `term.*`, `net.*`, `web.*`, or bridges
-in v1.
+GUI projects use `mode = "command"`. `ui.*` is a built-in egui convenience,
+not the GUI application's dependency boundary. GUI apps can declare and import
+the same `[[libs]]` and `[[bridges]]` providers as native apps. The common
+linker also supplies its built-in WASI, `term.*`, and `net.*` capabilities when
+a module imports them. Use only dependencies the project declares and ships.
 
 | Import | WAT signature | Contract |
 |---|---|---|
@@ -101,21 +125,14 @@ The host deliberately returns button events on the next frame: WAT describes
 the current frame before egui receives pointer input for it. This avoids host
 callbacks and keeps control flow and state inside the module.
 
-## Libraries and host capabilities
+## Providers and host capabilities
 
-WASM libraries are how applications freely add logic without changing the
-harness: math, parsing, layouts, data structures, domain rules, codecs, and
-any computation that can operate on WASM memory can be supplied through
-`[[libs]]`. The app imports their exports through the manifest's `as`
-namespace. The harness auto-wires those exports after validating the target's
-allowed imports.
-
-Libraries cannot independently acquire operating-system effects. A module that
-needs a window, file picker, filesystem, network, GPU object, clipboard, or
-browser object still needs a documented host capability, because only the host
-can safely own and permission those resources. This is intentional capability
-security, not a WAT limitation. Prefer established implementations behind a
-small host adapter rather than rebuilding platform facilities in WAT.
+WASM providers are how applications freely add behavior without changing the
+harness. The app imports their exports through the manifest's `as` namespace;
+the export list and WASM type signatures are the contract. A provider may use
+other providers and available built-in effects, so it is not limited to pure
+calculation. Keep effects explicit in `host.toml` and bundle every provider
+needed by the app.
 
 ## Browser ABI v1
 
@@ -141,10 +158,10 @@ native import is added, add its exact signature and safety contract here too.
 
 ## Capability change checklist
 
-1. Define the minimal target-specific import and memory/error contract here.
-2. Implement it in the trusted host using an established library where one
+1. Confirm that a project-owned WASM provider cannot solve the requirement.
+2. Define the minimal target-specific built-in import and memory/error contract here.
+3. Implement it in the trusted host using an established library where one
    exists; the adapter should stay small.
-3. Reject unsupported names and signatures in `host-rs check`.
 4. Add a WAT proof project and automated/executable verification.
 5. Update generated `AGENTS.md` target guidance and release notes.
 6. Keep old v1 behavior intact; version a breaking redesign instead.

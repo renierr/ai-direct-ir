@@ -619,41 +619,10 @@ fn check_gui(
     if !matches!(manifest.mode, crate::manifest::Mode::Command) {
         return fail("GUI projects require mode = \"command\"".into());
     }
-    if !manifest.bridges.is_empty() {
-        return fail("GUI projects do not support [[bridges]] yet".into());
-    }
     let app = wasmtime::Module::from_file(engine, crate::link::join(base, &manifest.app.path))?;
-    for import in app.imports() {
-        let allowed = (import.module() == "env" && import.name() == "memory")
-            || (import.module() == "ui" && gui_import_sig_ok(import.name(), &import.ty()))
-            || manifest
-                .libs
-                .iter()
-                .any(|lib| lib.namespace == import.module());
-        if !allowed {
-            return fail(format!(
-                "GUI app import {}.{} is unsupported; GUI projects may import env.memory, ui.*, and declared libraries",
-                import.module(),
-                import.name()
-            ));
-        }
-    }
-    for lib in &manifest.libs {
-        let module = wasmtime::Module::from_file(engine, crate::link::join(base, &lib.path))?;
-        for import in module.imports() {
-            let allowed = (import.module() == "env" && import.name() == "memory")
-                || (import.module() == "ui" && gui_import_sig_ok(import.name(), &import.ty()));
-            if !allowed {
-                return fail(format!(
-                    "GUI library {} imports unsupported {}.{}; libraries may import only env.memory and ui.*",
-                    lib.path,
-                    import.module(),
-                    import.name()
-                ));
-            }
-        }
-    }
-    // Instantiation proves declared library exports satisfy the app imports.
+    // The common linker is the authority for every target: a project may add
+    // any Core WASM provider through [[libs]] or [[bridges]]. Instantiation
+    // proves that providers and built-in host capabilities satisfy imports.
     link_all(engine, manifest, base)?;
     match app.exports().find(|e| e.name() == manifest.app.run) {
         Some(e) if browser_func_sig_ok(&e.ty(), 0, 0) => {}
@@ -665,13 +634,8 @@ fn check_gui(
         }
     }
     println!("run `{}`: signature ok", manifest.app.run);
-    println!("check {manifest_path}: GUI imports are provided by the egui host");
+    println!("check {manifest_path}: all modules linked, all imports satisfied");
     Ok(())
-}
-
-fn gui_import_sig_ok(name: &str, ty: &ExternType) -> bool {
-    matches!(name, "label" | "button")
-        && browser_func_sig_ok(ty, 2, if name == "button" { 1 } else { 0 })
 }
 
 /// Browser modules are checked against the browser host ABI, not linked in
@@ -990,11 +954,11 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
             "host-rs run",
             "`host-rs run` opens the native egui window and calls the configured entry once per UI frame. `host-rs dist` contains the executable, manifest, and compiled application.",
             "",
-            "The module imports `env.memory` plus documented `ui.*` functions and exports a zero-argument frame function. WAT owns state; the host renders controls using egui. Read `docs/22-abi.md` before changing imports.",
+            "The module exports a zero-argument frame function. It may import built-in capabilities such as `ui.*` and any project-declared `[[libs]]` or `[[bridges]]` provider. WAT owns state; the host renders the built-in controls using egui. Read `docs/22-abi.md` before changing a built-in import.",
             "Run `host-rs run`, interact with the window, and confirm expected state changes",
-            "- GUI v1 permits only `env.memory`, `ui.label(ptr, len)`, and `ui.button(ptr, len) -> i32`.
+            "- `ui.label(ptr, len)` and `ui.button(ptr, len) -> i32` are built-in GUI conveniences, not a limit on application dependencies. Add Core WASM providers through `[[libs]]` or `[[bridges]]`; their exports can use any namespace.
 - The entry runs once per UI frame. Button clicks are returned on the following frame; retain application state in WAT globals or memory.
-- Do not import WASI, `term.*`, `net.*`, `web.*`, `[[libs]]`, or `[[bridges]]`.",
+- `host-rs check` links the complete declared graph. An unresolved import is an integration error, not a reason to add an application-specific harness API.",
         )
     } else {
         (

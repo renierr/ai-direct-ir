@@ -44,9 +44,10 @@ __TARGET_CONTRACT__
 ## Changing The App
 
 Start with the behavior requested for this application. Keep state, layout,
-and policy in WAT. If a capability is missing, describe the required ABI and
-its security boundary before changing the target host. Do not add arbitrary
-host-language execution as an application shortcut.
+and policy in WAT. Add reusable behavior by declaring WASM providers in
+`host.toml`; do not change the harness merely because this app needs a library.
+Only propose a new built-in host capability after a project-owned provider or
+available WASI capability cannot solve the requirement.
 
 Read `AGENTS.md` before editing. It defines the target-specific rules and the
 required verification workflow.

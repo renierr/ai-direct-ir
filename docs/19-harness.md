@@ -1,10 +1,11 @@
 # The generic harness (`host-rs`)
 
-One CLI builds and validates every app in this repo. Native apps run through
-the bundled Wasmtime host; browser apps run through a generated JavaScript
-host; GUI apps run through a native egui host. A new project = a TOML manifest + `.wasm` files. The harness is never
-rebuilt for a new app — exactly the "config, not code" property the user asked
-for.
+One CLI builds, composes, validates, and packages every app in this repo.
+Native apps run through the bundled Wasmtime host; browser apps run through a
+generated JavaScript host; GUI apps run through a native egui host. A new
+project = a TOML manifest + `.wasm` files. The harness is never rebuilt merely
+because an app needs another WASM library: projects declare providers in their
+own manifest and the linker resolves their exports.
 
 ## Run
 
@@ -50,7 +51,7 @@ host-rs serve
 host-rs dist
 ```
 
-`host-rs new name` asks which host to scaffold: `native` (the default) or
+`host-rs new name` asks which host to scaffold: `native` (the default),
 `browser`, or `gui`. A browser project gets `index.html` and a baked-in `web-host.js`;
 after `build` and `check`, use `host-rs serve` to serve its directory on
 localhost with the required WASM MIME type. `host-rs run` only executes native
@@ -84,9 +85,11 @@ WASM manifests are validated as supplied. During development, run `host-rs
 build` and `host-rs check` separately for faster feedback. `dist` is removed
 and recreated on each invocation and is ignored by the scaffold's `.gitignore`.
 
-Native distributions contain `host-rs`, a local rewritten `host.toml`, the app
-WASM, all declared library and bridge WASM files, and the configured `root`
-data directory when present. Run the shipped executable from that directory:
+Native and GUI distributions contain `host-rs`, a local rewritten `host.toml`,
+the app WASM, all declared library and bridge WASM providers, and the configured
+`root` data directory when present. GUI apps can use the same declared providers
+and available WASI, terminal, and TCP imports as native apps; egui is only the
+built-in window renderer. Run the shipped executable from that directory:
 
 ```bash
 ./host-rs run
@@ -182,10 +185,11 @@ bindings.
 | `examples/pi/pi.toml` | command | app only (`_start`, stdio) |
 | `examples/hello/hello.toml` | command | app only |
 
-## v1 limits (extend once, all apps benefit)
+## Current limits
 
 - Bridge calls are fixed-arity `(in_ptr, in_len, out_ptr) -> rc`.
-- Syscalls are TCP client/server + WASI files/stdio. No UDP/timers yet.
+- Built-in host effects are TCP client/server + WASI files/stdio. No UDP/timers
+  yet. A project can still add a WASM provider without changing the harness.
 - `term.*` adds an optional raw-terminal capability (key events, alternate
   screen, cursor, size); see `docs/21-terminal.md`. It rejects pipes so apps
   must keep an ordinary stdio fallback.

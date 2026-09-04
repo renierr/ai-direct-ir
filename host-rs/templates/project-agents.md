@@ -15,9 +15,10 @@ requested application while preserving the target runtime contract.
 - __VERIFY_ACTION__ before claiming user-visible behavior works.
 - Keep the WAT memory map current. Pointer ranges, byte lengths, and shared
   memory ownership are ABI, not incidental implementation details.
-- Read `docs/22-abi.md` in the harness repository before adding or changing
-  imports. Only documented target capabilities are valid; `host-rs check`
-  rejects all others.
+- Read `docs/22-abi.md` in the harness repository before changing a built-in
+  host import. Add application dependencies as declared `[[libs]]` or
+  `[[bridges]]`; their namespaces and exports are project-owned. `host-rs
+  check` proves the complete declared module graph links.
 - Keep generated `.wasm` out of source control unless this application
   deliberately distributes it.
 - `.gitignore` excludes generated build output and the future `dist/` release
@@ -39,8 +40,9 @@ __TARGET_AGENT_CONTRACT__
 
 ## Scope
 
-Prefer the smallest application-local change. A new host capability needs an
-explicit ABI, implementation, validation, and documentation; do not invent
-undeclared imports or bypass the target host with arbitrary code execution.
-ABI additions are backward-compatible only: never change an existing import's
-signature, memory contract, or behavior in place.
+Prefer the smallest application-local change. Do not change the harness merely
+because this app needs a library: declare a WASM provider in `host.toml` and
+import its exports. Built-in host capabilities need an explicit ABI,
+implementation, validation, and documentation. ABI additions are
+backward-compatible only: never change an existing built-in import's signature,
+memory contract, or behavior in place.
