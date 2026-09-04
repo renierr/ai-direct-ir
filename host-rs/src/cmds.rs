@@ -210,32 +210,15 @@ pub fn cmd_build(engine: &Engine, path: &str) -> Result<()> {
 /// output is missing. This keeps run/check/dist usable as single commands while
 /// preserving `host-rs build` as the explicit force-rebuild command.
 fn build_if_needed(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
+    let base = manifest_base(path);
+    build_providers(engine, path, manifest, &base, false)?;
     let Some(source) = &manifest.app.source else {
         return Ok(());
     };
-    let base = manifest_base(path);
     let source = manifest_path(&base, source);
     let output = manifest_path(&base, &manifest.app.path);
-    let rebuild = match (std::fs::metadata(&source), std::fs::metadata(&output)) {
-        (Ok(source_metadata), Ok(output)) => {
-            // `>=`, not `>`: a source written in the same timestamp tick as the
-            // artifact must still rebuild. Editors are slow enough for `>` to
-            // look correct; an agent writing a fragment and running it straight
-            // away is not, and a skipped rebuild silently runs stale code. A
-            // tie only ever costs one extra rebuild.
-            let output_time = output.modified()?;
-            let mut rebuild = source_metadata.modified()? >= output_time;
-            for fragment in expand_wat(&source)?.includes {
-                rebuild |= std::fs::metadata(fragment)?.modified()? >= output_time;
-            }
-            rebuild
-        }
-        (Ok(_), Err(e)) if e.kind() == std::io::ErrorKind::NotFound => true,
-        (Err(e), _) => return Err(e.into()),
-        (_, Err(e)) => return Err(e.into()),
-    };
-    if rebuild {
-        build_wat(engine, path, manifest)?;
+    if is_stale(&source, &output)? {
+        assemble(engine, &source, &output, manifest.declared_target, path)?;
     }
     Ok(())
 }
@@ -248,30 +231,99 @@ fn build_wat(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
         ))
     })?;
     let base = manifest_base(path);
-    let source = manifest_path(&base, source);
-    let output = manifest_path(&base, &manifest.app.path);
-    let expanded = expand_wat(&source)?;
+    build_providers(engine, path, manifest, &base, true)?;
+    assemble(
+        engine,
+        &manifest_path(&base, source),
+        &manifest_path(&base, &manifest.app.path),
+        manifest.declared_target,
+        path,
+    )
+}
+
+/// Assemble any declared provider sources. A provider artifact is built from
+/// its source for the same reason an application's is: otherwise editing the
+/// WAT beside it changes nothing.
+fn build_providers(
+    engine: &Engine,
+    path: &str,
+    manifest: &Manifest,
+    base: &std::path::Path,
+    force: bool,
+) -> Result<()> {
+    for provider in &manifest.providers {
+        let Some(source) = &provider.source else {
+            continue;
+        };
+        let source = manifest_path(base, source);
+        let output = manifest_path(base, &provider.path);
+        if force || is_stale(&source, &output)? {
+            assemble(engine, &source, &output, Some(Target::Component), path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Assemble one WAT source into one WASM artifact.
+fn assemble(
+    engine: &Engine,
+    source: &std::path::Path,
+    output: &std::path::Path,
+    declared: Option<Target>,
+    manifest_path: &str,
+) -> Result<()> {
+    let expanded = expand_wat(source)?;
     let wasm = wat::parse_str(&expanded.text)
-        .map_err(|e| assemble_error(&source, &expanded, &e.to_string()))?;
+        .map_err(|e| assemble_error(source, &expanded, &e.to_string()))?;
+    // The assembled bytes say what this is; the manifest never has to. When it
+    // does say, a disagreement is caught here rather than in the wrong linker.
+    let is_component = crate::manifest::is_component_binary(&wasm);
+    match (declared, is_component) {
+        (Some(Target::Component), false) => {
+            return fail(format!(
+                "{manifest_path} declares `target = \"component\"` but `{}` assembles to a Core WASM module",
+                source.display()
+            ));
+        }
+        (Some(declared), true) if declared != Target::Component => {
+            return fail(format!(
+                "`{}` assembles to a component, but {manifest_path} declares a Core target",
+                source.display()
+            ));
+        }
+        _ => {}
+    }
     // Validate before writing: `build` must never leave an artifact behind that
     // `check`, `dist`, or a commit would later pick up as good. Compiling (not
     // just validating) is what reports the offending function index, which is
     // the only handle the include map can translate.
-    match manifest.target {
-        Target::Component => {
-            wasmtime::component::Component::new(engine, &wasm)
-                .map_err(|e| validate_error(&source, &expanded, &e))?;
-        }
-        _ => {
-            wasmtime::Module::new(engine, &wasm)
-                .map_err(|e| validate_error(&source, &expanded, &e))?;
-        }
+    if is_component {
+        wasmtime::component::Component::new(engine, &wasm)
+            .map_err(|e| validate_error(source, &expanded, &e))?;
+    } else {
+        wasmtime::Module::new(engine, &wasm).map_err(|e| validate_error(source, &expanded, &e))?;
     }
-    std::fs::write(&output, wasm)?;
+    std::fs::write(output, wasm)?;
     // Progress goes to stderr: `run`, `check`, and `dist` may rebuild first,
     // and an app's piped stdout must stay the app's alone.
     eprintln!("built {} -> {}", source.display(), output.display());
     Ok(())
+}
+
+/// True when `output` is missing, or no newer than `source` or any fragment it
+/// includes. `>=`, not `>`: a source written in the same timestamp tick as the
+/// artifact must still rebuild.
+fn is_stale(source: &std::path::Path, output: &std::path::Path) -> Result<bool> {
+    let output_time = match std::fs::metadata(output) {
+        Ok(metadata) => metadata.modified()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(e) => return Err(e.into()),
+    };
+    let mut stale = std::fs::metadata(source)?.modified()? >= output_time;
+    for fragment in expand_wat(source)?.includes {
+        stale |= std::fs::metadata(fragment)?.modified()? >= output_time;
+    }
+    Ok(stale)
 }
 
 /// One expanded WAT source plus the origin of every emitted line, so parser and
