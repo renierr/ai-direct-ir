@@ -1090,7 +1090,7 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
             "host-rs run",
             "`host-rs run` opens the native egui window and calls the configured entry once per UI frame. `host-rs dist` contains the executable, manifest, and compiled application.",
             "",
-            "The module exports a zero-argument frame function. It may import built-in capabilities such as `ui.*` and any project-declared `[[libs]]` or `[[bridges]]` provider. WAT owns state; the host renders the built-in controls using egui. Read `docs/22-abi.md` before changing a built-in import.",
+            "The module exports a zero-argument frame function. It may import built-in capabilities such as `ui.*` and any project-declared `[[libs]]` or `[[bridges]]` provider. WAT owns state; the host renders the built-in controls using egui. Read `docs/PROJECT.md` before changing a built-in import.",
             "Run `host-rs run`, interact with the window, and confirm expected state changes",
             "- `ui.label(ptr, len)` and `ui.button(ptr, len) -> i32` are built-in GUI conveniences, not a limit on application dependencies. Add Core WASM providers through `[[libs]]` or `[[bridges]]`; their exports can use any namespace.
 - The entry runs once per UI frame. Button clicks are returned on the following frame; retain application state in WAT globals or memory.

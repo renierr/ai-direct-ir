@@ -5,7 +5,7 @@
 ;; multiselect (features), confirm, outro summary. Cancel -> exit 1,
 ;; I/O error -> exit 2. Fully scriptable: pipe answers on stdin.
 ;;
-;; Own-vs-leverage note (see docs/20-own-vs-leverage.md): finished TUI
+;; Finished TUI behavior belongs in a declared project provider; keep this
 ;; libs need raw-mode termios the sandbox doesn't grant, so the thin
 ;; prompt layer is owned here (~150 lines). ANSI output would work
 ;; (it's just bytes); instant keypress input would not.

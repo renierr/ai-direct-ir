@@ -6,6 +6,11 @@
 WASM apps and libs. Everything else (examples, libs, docs) exists to prove
 and use it. AI writes the IR (`.wat`); the harness runs it.
 
+Read `docs/PROJECT.md` before starting work. It is the living project
+documentation shared with dependent sibling projects and the source of truth
+for implemented behavior, current limitations, the three-repository split, and
+ordered next milestones.
+
 ## Repository Role
 
 This is the generic platform repository. Work here when an example application
@@ -19,13 +24,13 @@ generic design changes.
 
 - **Never install, upgrade, or remove software without explicit user consent.**
   Missing tool? Stop and ask. (`rustup target add …`, `pip install …`, etc.)
-- **Verify by execution.** Every claim ends in a run: `wat2wasm` must
-  assemble, `host-rs check` must pass, `curl`/CLI output must match.
+- **Verify by execution.** Every claim ends in a run: `host-rs` must assemble,
+  `host-rs check` must pass, `curl`/CLI output must match.
   Raw bytes over pretty output (`curl -i`; curl hides NULs).
 - **Keep the harness generic.** New app needs go in the manifest, never in
   `host-rs` code. New ABI shapes (syscalls, bridge arities) extend the host
   once so all apps benefit.
-- **Builder phase: redesign freely.** Read and update `docs/22-abi.md` with
+- **Builder phase: redesign freely.** Update `docs/PROJECT.md` with
   every host capability change. Current Core ABI and GUI/browser imports are
   experimental; replace them directly when WIT/Component Model composition is
   better. Do not add compatibility layers without a real consumer.
@@ -36,8 +41,6 @@ generic design changes.
 - **Generated = ignored.** Track sources (`.wat`, `.rs`, `.toml`, `.md`);
   never commit `target/`, `*.o`, or lib `*.wasm`. Exception:
   `examples/**/*.wasm` are tracked as runnable distributables.
-- **Log experiments** in `docs/06-lablog.md` (newest first):
-  Goal / Command / Output / Learning. Findings that stick go in `docs/`.
 
 ## Layout
 
@@ -45,24 +48,21 @@ generic design changes.
 - `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `<name>.toml`
 - `examples/server/` — `server.wat`, `manifest.toml`, `www/` demo root
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` — Rust crate (`sha2`)
-- `native/` — wasm2c experiments; `tools/` — retired Python host; `docs/`
+- `native/` and `tools/` — legacy experiments; `docs/` — current platform docs
 
 ## Build / run (from repo root unless noted)
 
 ```bash
-wat2wasm libs/http/http.wat -o libs/http/http.wasm
-wat2wasm examples/server/server.wat -o examples/server/server.wasm
 cargo build --release --target wasm32-wasip1   # from libs/sha256/
 cp libs/sha256/target/wasm32-wasip1/release/sha256.wasm libs/sha256/
-cargo build --release                          # from host-rs/ (harness, once)
-./host-rs/target/release/host-rs check examples/server/manifest.toml
-./host-rs/target/release/host-rs examples/server/manifest.toml  # :8124
-echo 100 | ./host-rs/target/release/host-rs examples/pi/pi.toml
+./build.sh
+./dist/host-rs check examples/server/manifest.toml
+./dist/host-rs examples/server/manifest.toml  # :8124
+echo 100 | ./dist/host-rs examples/pi/pi.toml
 ```
 
-Manifest paths resolve manifest-dir-first (relocatable); full reference in
-`docs/19-harness.md`. Foreign `.wasm`? Start with
-`host-rs inspect <file>` (`docs/18-cargo-libs.md`).
+Manifest paths resolve manifest-dir-first (relocatable). Foreign `.wasm`?
+Start with `host-rs inspect <file>`.
 
 ## Conventions
 

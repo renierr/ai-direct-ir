@@ -1,6 +1,6 @@
 ;; lib/http.wat — "somebody else's lib" for the static-file server.
 ;;
-;; Linking contract (see docs/16-lib-reuse-linking.md):
+;; Linking contract: declared project provider export namespace.
 ;; - Memory is owned by the HOST and imported from "env" (min 2 pages).
 ;;   Both lib and app use it; no cross-module pointers problem because
 ;;   there is only ONE memory.

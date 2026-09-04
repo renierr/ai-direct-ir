@@ -2,7 +2,7 @@
 ;;
 ;; Imports:
 ;;   env.memory (re-exported as "memory" for WASI), net.listen/accept/recv/close
-;;   (host TCP syscalls — swappable scaffolding, see docs/17-static-server.md),
+;;   (host TCP syscalls — experimental generic scaffolding),
 ;;   lib.* (response helpers), WASI file calls for serving www/.
 ;; Assumes the single preopened dir (www/) is WASI fd 3.
 ;; Memory map (page 0, app-owned): see $layout comment in code.
