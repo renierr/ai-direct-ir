@@ -84,17 +84,27 @@ may be used or distributed with its required notices. We do not bundle it into
 `host-rs` or a shipped application: it is a platform-specific 16 MiB build tool
 and is unnecessary at runtime.
 
-`host-rs` has a `component` target: a WASM component on WASI 0.2, whose source
-is a `(component ...)` WAT the harness assembles in-process. The embedded `wat`
-parser handles the Component Model text format and Wasmtime 48 already carries
-WASI 0.2, so component authoring needs no external tool at all.
+**`target = "component"` — a WASM component on WASI 0.2 — is the default for
+new projects.** Its source is a `(component ...)` WAT the harness assembles
+in-process: the embedded `wat` parser handles the Component Model text format
+and Wasmtime 48 already carries WASI 0.2, so component authoring needs no
+external tool at all.
 
-`examples/component-hello/` is a `wasi:cli/command` component written entirely
-by hand in WAT — WASI interfaces, resources, canonical lowering and lifting
-included. **An AI can author the Component Model boundary directly**, which is
-the same claim this project makes about Core WASM. It is heavier than WASI
-Preview 1's flat integer imports, but it does not require a bindings generator
-or a language toolchain.
+`examples/{hello,pi,prompts}/` are `wasi:cli/command` components written
+entirely by hand in WAT — WASI interfaces, resources, canonical lowering and
+lifting included. **An AI can author the Component Model boundary directly**,
+which is the same claim this project makes about Core WASM. It is heavier than
+WASI Preview 1's flat integer imports, but it needs no bindings generator and
+no language toolchain.
+
+`target = "native"` (Core WASM on WASI Preview 1) remains supported and is still
+required for capabilities the component path does not have yet:
+
+| Example | Why it is still Core |
+|---|---|
+| `server` | its `[[libs]]`/`[[bridges]]` providers are prebuilt Core modules, which a component cannot link without composition. `wasi:sockets` and `wasi:filesystem` do exist, so the rest is a rewrite, not a blocker |
+| `prompts-raw` | raw-mode terminal. `wasi:cli/terminal-input` is an empty resource: it tells you stdin is a terminal and offers no method to configure or read it |
+| `gui-hello` | `ui.*` is a project-owned egui ABI, not WASI at all |
 
 `wasm-tools` remains useful only for checks the harness does not implement:
 
@@ -136,7 +146,7 @@ the target and its linker to be installed separately.
 
 - `host-rs/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`net`/`link`/`cmds` modules)
 - `host-rs/tests/cli.rs` — end-to-end tests that run the real binary
-- `examples/{hello,pi,server,prompts,prompts-raw,gui-hello,component-hello}/` — runnable apps; each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
+- `examples/{hello,pi,prompts}/` — WASI 0.2 components; `examples/{server,prompts-raw,gui-hello}/` — Core WASM. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 

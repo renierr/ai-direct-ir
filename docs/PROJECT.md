@@ -51,7 +51,23 @@ line or a Core function index back to authored source.
 | `native` | Wasmtime, WASI Preview 1, experimental `term.*`/`net.*`, and declared Core providers. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
 | `gui` | Native egui `ui.*` host and declared Core providers. |
-| `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. No provider composition yet. |
+| `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. **The default for new projects.** No provider composition yet. |
+
+`hello`, `pi`, and `prompts` are WASI 0.2 components. The other three stay on
+Core WASM, for three different reasons worth keeping straight:
+
+- `server` is blocked by its providers, not by WASI. `wasi:sockets` and
+  `wasi:filesystem` both exist in 0.2, so its `net.*` and `path_open` use is a
+  rewrite. Its `[[libs]]`/`[[bridges]]` entries are the real blocker: those link
+  prebuilt Core modules, which a component cannot do without composition.
+- `prompts-raw` is blocked by WASI itself. `wasi:cli/terminal-input` is an
+  empty resource — it reports that stdin is a terminal and offers no method to
+  set raw mode or read a key. There is nothing to port `term.*` onto.
+- `gui-hello` is not a WASI question at all. `ui.*` is a project-owned egui
+  ABI and would remain a custom host interface under either generation.
+
+Preview 1 is therefore not deprecated. It is the escape hatch for capabilities
+0.2 does not cover, and for Core providers until composition exists.
 
 Core project-owned providers currently use experimental `[[libs]]` (shared
 memory) or `[[bridges]]` (copying adapter) manifest entries. Their exports are
@@ -103,8 +119,8 @@ inside a component; each module's segments are checked for overlap against that
 module's own memory.
 
 Unnamed segments are untouched, so naming is the opt-in. The scaffolds, the
-`hello`, `gui-hello`, and `component-hello` examples, and the mail example use
-named segments;
+`hello`, `pi`, and `gui-hello` examples, and the mail example use named
+segments;
 `pi`, `prompts`, `prompts-raw`, and `server` still pack tables at
 hand-assigned addresses and have not been converted.
 
@@ -194,13 +210,18 @@ generator and no language toolchain.** This was the open question behind the
 whole component plan, and it is now answered by a running program rather than
 an argument.
 
-`examples/component-hello/` is a `wasi:cli/command` component written entirely
-as component WAT: it declares the `wasi:io/error`, `wasi:io/streams`, and
-`wasi:cli/stdout` interfaces including the `output-stream` resource and the
-`stream-error` variant, lowers them into Core functions, runs ordinary Core WAT
-against them, and lifts `run` back out as `wasi:cli/run@0.2.12`. `host-rs`
-assembles, validates, instantiates, runs, and packages it. `wasm-tools validate`
-and `wasm-tools component wit` agree with the result.
+`examples/hello/`, `examples/pi/`, and `examples/prompts/` are `wasi:cli/command`
+components written entirely as component WAT. They declare the `wasi:io/error`,
+`wasi:io/streams`, `wasi:cli/stdin`, `wasi:cli/stdout`, `wasi:cli/stderr`, and
+`wasi:cli/exit` interfaces — resources, the `stream-error` variant, and
+`cabi_realloc` for host-allocated `list<u8>` results included — lower them into
+Core functions, run ordinary Core WAT against them, and lift `run` back out as
+`wasi:cli/run@0.2.12`. `host-rs` assembles, validates, instantiates, runs, and
+packages them. `wasm-tools validate` and `wasm-tools component wit` agree.
+
+`pi` and `prompts` were converted from Preview 1 with their compute and prompt
+logic untouched: only the import layer and a handful of call sites changed. The
+Core logic an AI writes is unaffected by which WASI generation carries its I/O.
 
 The premise therefore holds at the Component Model boundary, not only the Core
 one. It is not effortless: the interface declarations are far heavier than
@@ -209,6 +230,10 @@ function signature must reference the *exported* type id, not the local type
 declaration it was defined from, or validation rejects the whole instance). That
 argues for `host-rs` eventually generating the boundary from a `.wit` file the
 way it now derives `$name.len` — but it is a convenience, not a prerequisite.
+
+The three converted examples each carry an identical ~60-line WASI boundary,
+because `;; @include` is project-local and cannot be shared across example
+directories. That duplication is the clearest evidence for generating it.
 
 Verified in this tree, with no new dependency:
 
@@ -317,11 +342,11 @@ being specification-only before more specification is written.
 2. Decide the composition mechanism, once step 1 produces something to compose.
    See The Open Composition Decision. This is now the only thing standing
    between the component target and a real provider consumer.
-3. Consider generating the WASI/WIT interface boundary from a `.wit` file.
-   `examples/component-hello/` proves the boundary is writable by hand; it is
-   also the most error-prone part of an otherwise ordinary Core WAT program,
-   and it is mechanically derivable, which is the same argument that produced
-   named data segments.
+3. Generate the WASI/WIT interface boundary from a `.wit` file. The examples
+   prove it is writable by hand, and that it is the most error-prone and most
+   duplicated part of an otherwise ordinary Core WAT program: three examples
+   carry the same ~60 lines. It is mechanically derivable, which is the same
+   argument that produced named data segments.
 4. Add a separate component consumer proof. Do not force the existing Core WAT
    mail app to call a WIT component without an explicit component boundary.
 5. After the component path works, present SQLite candidates for approval;

@@ -10,8 +10,12 @@ provider, or its WIT/Component Model integration.
 
 ## Environment
 
-- Core WAT projects require `host-rs` on `PATH`. It assembles and validates WAT
-  in-process; do not add WABT merely to build an application.
+- Every project needs only `host-rs` on `PATH`. It assembles and validates both
+  Core WAT and component WAT in-process; do not add WABT, `wit-bindgen`, or a
+  language toolchain merely to build an application.
+- **Prefer `target = "component"` (WASI 0.2) for new work.** Preview 1 (`target
+  = "native"`) remains supported and is still required for raw-mode terminals,
+  the `net.*` sockets ABI, `ui.*`, and `[[libs]]`/`[[bridges]]` providers.
 - `host-rs check`, target run, and `host-rs dist` rebuild a declared root WAT
   source when it or an included fragment is newer than the generated WASM.
   `host-rs build` forces a rebuild.
@@ -27,6 +31,50 @@ provider, or its WIT/Component Model integration.
   application distribution or invoke it at runtime. `wasm-tools compose` is
   deprecated upstream — composition of prebuilt components is an open decision.
 - Never install, upgrade, or remove tooling without explicit user consent.
+
+## WASI 0.2 Recipes
+
+`target = "component"` is the default for new work. Your own scaffolded
+`<name>.wat` is a complete, working example: read it first. The four
+constructs below are the ones that are hard to guess.
+
+**Declare an interface you import.** A signature must reference the
+*exported* type id (`$sexp`), never the local type it was defined from, or
+validation rejects the whole instance with an unhelpful message:
+
+```wat
+(import "wasi:io/streams@0.2.12" (instance $streams
+  (export "error" (type $ie (eq $error)))
+  (export "output-stream" (type $os (sub resource)))
+  (type $se (variant (case "last-operation-failed" (own $ie)) (case "closed")))
+  (export "stream-error" (type $sexp (eq $se)))
+  (export "[method]output-stream.blocking-write-and-flush"
+    (func (param "self" (borrow $os)) (param "contents" (list u8))
+          (result (result (error $sexp)))))))
+```
+
+**Break the memory cycle.** Lowering an import needs the memory; the logic
+module needs the lowered imports. Put the memory in its own core module:
+
+```wat
+(core module $mem-mod (memory (export "memory") 1) ...)
+(core instance $mem (instantiate $mem-mod))
+(alias core export $mem "memory" (core memory $memory))
+(core func $write-l (canon lower (func $write) (memory $memory) (realloc $realloc)))
+```
+
+**Export `cabi_realloc` when the host returns a value to you.** Anything
+returning `list<u8>` or `string` is allocated into your memory through it. A
+bump allocator is enough when the program never frees; place its base above
+every fixed address in the memory map.
+
+**Lift the entry point.** `run: func() -> result` — `0` is exit 0, `1` is a
+failed run. For an exit from deep inside the program, where a return cannot
+reach, import `wasi:cli/exit` (`exit: func(status: result)`), the direct
+replacement for Preview 1's `proc_exit`.
+
+Read the WIT for an interface before declaring it. It ships with Wasmtime:
+`wasmtime-wasi-*/src/p2/wit/deps/{cli,io,filesystem,sockets}.wit`.
 
 ## Core WAT
 

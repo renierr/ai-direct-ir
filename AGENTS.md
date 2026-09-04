@@ -47,10 +47,8 @@ generic design changes.
 
 - `host-rs/src/` — `main.rs` (CLI) + `manifest`/`host`/`net`/`link`/`cmds`
 - `host-rs/tests/cli.rs` — end-to-end tests that drive the real binary
-- `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `<name>.toml`;
+- `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `host.toml`;
   every manifest declares `source`, so the artifact is rebuilt from the WAT
-- `examples/component-hello/` — a hand-written WASI 0.2 command component;
-  start here for `target = "component"`
 - `examples/server/` — `server.wat`, `manifest.toml`, `www/` demo root
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` (`sha2`) and
   `libs/text-width/` (`unicode-width`) — Rust crates
@@ -64,9 +62,9 @@ cp libs/sha256/target/wasm32-wasip1/release/sha256.wasm libs/sha256/
 cargo test --manifest-path host-rs/Cargo.toml
 ./build.sh
 ./dist/host-rs check examples/server/manifest.toml
-./dist/host-rs run examples/component-hello/host.toml
+./dist/host-rs run examples/hello/host.toml
 ./dist/host-rs examples/server/manifest.toml  # :8124
-echo 100 | ./dist/host-rs examples/pi/pi.toml
+echo 100 | ./dist/host-rs run examples/pi/host.toml
 ```
 
 Manifest paths resolve manifest-dir-first (relocatable). Foreign `.wasm`?
@@ -80,7 +78,10 @@ Start with `host-rs inspect <file>`.
 - Never hand-write a string length. Name the segment — `(data $msg (i32.const
   0x1000) "...")` — and read `$msg.ptr` / `$msg.len`, which host-rs derives.
   Named segments need a literal offset and may not overlap.
-- Manifest per app, next to its modules; `host-rs init` scaffolds it.
+- Manifest per app, next to its modules; `host-rs init` scaffolds it. Name it
+  `host.toml` so the project directory is the argument.
+- Prefer `target = "component"` (WASI 0.2) for new work. Reach for `native`
+  (Preview 1) only for sockets, raw terminal, `ui.*`, or Core providers.
 - Commit messages: short imperative summary.
 - **Never commit or push without an explicit request.** Finishing a unit of
   work is not a request. Leave changes in the working tree, report what
