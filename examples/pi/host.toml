@@ -1,0 +1,9 @@
+# Interactive pi calculator as a WASI 0.2 component.
+# Run from anywhere: echo 100 | host-rs run examples/pi/host.toml
+target = "component"
+mode = "command"
+
+[app]
+source = "pi.wat"
+path = "pi.wasm"
+run = "wasi:cli/run"

@@ -1,0 +1,8 @@
+# The smallest AI-direct IR app: a WASI 0.2 component.
+target = "component"
+mode = "command"
+
+[app]
+source = "hello.wat"
+path = "hello.wasm"
+run = "wasi:cli/run"

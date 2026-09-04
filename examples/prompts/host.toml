@@ -1,0 +1,8 @@
+# Line-based CLI prompts as a WASI 0.2 component. Scriptable: pipe answers.
+target = "component"
+mode = "command"
+
+[app]
+source = "prompts.wat"
+path = "prompts.wasm"
+run = "wasi:cli/run"

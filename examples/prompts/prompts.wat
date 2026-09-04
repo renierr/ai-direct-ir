@@ -1,34 +1,122 @@
-;; examples/prompts/prompts.wat — clack-style CLI prompts, line-based.
+;; examples/prompts/prompts.wat -- clack-style CLI prompts, line-based.
 ;;
-;; Command-mode app: WASI stdio only, own memory, no harness services.
+;; A WASI 0.2 component: stdio comes from wasi:cli, exit from wasi:cli/exit,
+;; and the entry point is wasi:cli/run. No harness services are used.
 ;; Flow (dummy project setup): intro, text (name), select (env),
 ;; multiselect (features), confirm, outro summary. Cancel -> exit 1,
 ;; I/O error -> exit 2. Fully scriptable: pipe answers on stdin.
 ;;
-;; Finished TUI behavior belongs in a declared project provider; keep this
-;; libs need raw-mode termios the sandbox doesn't grant, so the thin
-;; prompt layer is owned here (~150 lines). ANSI output would work
-;; (it's just bytes); instant keypress input would not.
+;; Finished TUI behavior belongs in a declared project provider; raw-mode
+;; termios has no WASI 0.2 interface, so instant keypress input is not
+;; available here. ANSI output would work: it is just bytes.
 ;;
-;; Memory map: 0x00 iov, 0x08 nwritten, 0x0C nread,
-;; 0x100 input line (256B), 0x1000+ read-only strings.
+;; Memory map: 0x08 write result, 0x0C bytes read, 0x10 read result,
+;; 0x100 input line (256B), 0x200 parked name, 0x1000+ read-only strings,
+;; 0x8000+ canonical ABI bump allocation
 
-(module
-  (import "wasi_snapshot_preview1" "fd_write"
-    (func $fd_write (param i32 i32 i32 i32) (result i32)))
-  (import "wasi_snapshot_preview1" "fd_read"
-    (func $fd_read (param i32 i32 i32 i32) (result i32)))
-  (import "wasi_snapshot_preview1" "proc_exit"
-    (func $exit (param i32)))
-  (memory 1)
-  (export "memory" (memory 0))
+(component
+  ;; --- WASI 0.2 boundary ------------------------------------------------
+  ;; Written by hand: declaring the interfaces, lowering them into Core
+  ;; functions, and lifting the entry point back out is all the Component
+  ;; Model boundary is. No bindings generator is involved.
+  ;;
+  ;; A function signature must reference the *exported* type id (`$sexp`),
+  ;; not the local type it was defined from, or validation rejects the
+  ;; whole instance.
+  (import "wasi:io/error@0.2.12" (instance $io-error
+    (export "error" (type (sub resource)))))
+  (alias export $io-error "error" (type $error))
+
+  (import "wasi:io/streams@0.2.12" (instance $streams
+    (export "error" (type $ie (eq $error)))
+    (export "input-stream" (type $is (sub resource)))
+    (export "output-stream" (type $os (sub resource)))
+    (type $se (variant (case "last-operation-failed" (own $ie)) (case "closed")))
+    (export "stream-error" (type $sexp (eq $se)))
+    (export "[method]input-stream.blocking-read"
+      (func (param "self" (borrow $is)) (param "len" u64)
+            (result (result (list u8) (error $sexp)))))
+    (export "[method]output-stream.blocking-write-and-flush"
+      (func (param "self" (borrow $os)) (param "contents" (list u8))
+            (result (result (error $sexp)))))))
+  (alias export $streams "input-stream" (type $istream))
+  (alias export $streams "[method]input-stream.blocking-read" (func $read))
+  (alias export $streams "output-stream" (type $ostream))
+  (alias export $streams "[method]output-stream.blocking-write-and-flush" (func $write))
+
+  (import "wasi:cli/stdin@0.2.12" (instance $stdin
+    (export "input-stream" (type (eq $istream)))
+    (export "get-stdin" (func (result (own $istream))))))
+  (alias export $stdin "get-stdin" (func $get-stdin))
+
+  (import "wasi:cli/stdout@0.2.12" (instance $stdout
+    (export "output-stream" (type (eq $ostream)))
+    (export "get-stdout" (func (result (own $ostream))))))
+  (alias export $stdout "get-stdout" (func $get-stdout))
+
+  (import "wasi:cli/exit@0.2.12" (instance $exit-i
+    (export "exit" (func (param "status" (result))))))
+  (alias export $exit-i "exit" (func $exit-fn))
+
+  ;; --- shared memory ----------------------------------------------------
+  ;; Lowering an import needs the memory; the logic module needs the lowered
+  ;; imports. A separate memory module breaks that cycle.
+  (core module $mem-mod
+    (memory (export "memory") 1)
+    (global $bump (mut i32) (i32.const 0x8000))
+    ;; The canonical ABI allocates host-produced values here. A bump
+    ;; allocator is enough: this program never frees.
+    (func (export "cabi_realloc")
+      (param $old i32) (param $old_size i32) (param $align i32) (param $new i32)
+      (result i32)
+      (local $ptr i32)
+      (global.set $bump
+        (i32.and (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
+                 (i32.xor (i32.sub (local.get $align) (i32.const 1)) (i32.const -1))))
+      (local.set $ptr (global.get $bump))
+      (global.set $bump (i32.add (global.get $bump) (local.get $new)))
+      (local.get $ptr)))
+  (core instance $mem (instantiate $mem-mod))
+  (alias core export $mem "memory" (core memory $memory))
+  (alias core export $mem "cabi_realloc" (core func $realloc))
+
+  (core func $exit-l (canon lower (func $exit-fn)))
+  (core func $get-stdin-l (canon lower (func $get-stdin)))
+  (core func $get-stdout-l (canon lower (func $get-stdout)))
+  (core func $read-l (canon lower (func $read) (memory $memory) (realloc $realloc)))
+  (core func $write-l (canon lower (func $write) (memory $memory) (realloc $realloc)))
+  (core instance $wasi
+    (export "exit" (func $exit-l))
+    (export "get-stdin" (func $get-stdin-l))
+    (export "get-stdout" (func $get-stdout-l))
+    (export "read" (func $read-l))
+    (export "write" (func $write-l)))
+
+  ;; --- application logic, ordinary Core WAT -----------------------------
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (import "wasi" "get-stdin" (func $get_stdin (result i32)))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "read" (func $read (param i32 i64 i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    ;; wasi:cli/exit replaces proc_exit: $abort and the cancel path unwind
+    ;; from deep inside the prompt flow, where a return cannot reach.
+    (import "wasi" "exit" (func $exit (param i32)))
 
   (func $print (param $p i32) (param $n i32)
-    (i32.store (i32.const 0) (local.get $p))
-    (i32.store (i32.const 4) (local.get $n))
-    (call $fd_write (i32.const 1) (i32.const 0)
-      (i32.const 1) (i32.const 8))
-    (drop))
+    (call $write (call $get_stdout)
+      (local.get $p) (local.get $n) (i32.const 0x08)))
+
+  ;; read_one(ptr) -> 0 ok, non-zero error. Bytes read land at 0x0C, so the
+  ;; caller reads it exactly as it read the Preview 1 nread.
+  (func $read_one (param $ptr i32) (result i32)
+    (call $read (call $get_stdin) (i64.const 1) (i32.const 0x10))
+    (if (i32.load (i32.const 0x10)) (then (return (i32.const 1))))
+    (i32.store (i32.const 0x0C) (i32.load (i32.const 0x18)))
+    (if (i32.load (i32.const 0x0C))
+      (then (i32.store8 (local.get $ptr)
+              (i32.load8_u (i32.load (i32.const 0x14))))))
+    (i32.const 0))
 
   (func $abort (param $p i32) (param $n i32) (param $code i32)
     (call $print (local.get $p) (local.get $n))
@@ -61,11 +149,8 @@
     (block $done
       (loop $rd
         (local.get $total) (i32.const 256) (i32.ge_u) (br_if $done)
-        (i32.store (i32.const 0)
-          (i32.add (i32.const 0x100) (local.get $total)))
-        (i32.store (i32.const 4) (i32.const 1))
-        (local.set $r (call $fd_read (i32.const 0)
-          (i32.const 0) (i32.const 1) (i32.const 0x0C)))
+        (local.set $r (call $read_one
+          (i32.add (i32.const 0x100) (local.get $total))))
         (local.get $r) (i32.const 0) (i32.ne)
         (if (then (i32.const -1) (return)))
         (local.get $total) (i32.eqz)
@@ -193,7 +278,7 @@
           (i32.sub (local.get $cur) (i32.const 1)))))))
     (local.get $mask))
 
-  (func (export "_start")
+  (func (export "run") (result i32)
     (local $n i32) (local $v i32) (local $mask i32)
     (local $np i32) (local $nl i32) (local $ep i32) (local $el i32)
     (call $print (i32.const 0x1000) (i32.const 35))   ;; intro
@@ -310,8 +395,7 @@
     (call $print (i32.const 0x1138) (i32.const 4))
     (call $print (local.get $ep) (local.get $el))
     (call $print (i32.const 0x110A) (i32.const 1))
-    (call $exit (i32.const 0))
-    (unreachable))
+    (i32.const 0))
 
   (data (i32.const 0x1000) "◆ prompts demo — project setup\n")
   (data (i32.const 0x1023) "◇ Project name? [my-app]: ")
@@ -342,4 +426,14 @@
   (data (i32.const 0x116A) "tls")
   (data (i32.const 0x116D) "metrics")
   (data (i32.const 0x1174) "my-app")
+  )
+
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))))
+
+  ;; `run: func() -> result`: ok is exit 0, err is a failed run.
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
 )
