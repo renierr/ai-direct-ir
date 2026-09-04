@@ -73,7 +73,7 @@ pub fn print_help() {
         ),
         (
             "new <name>",
-            "choose native, browser, GUI, or component; scaffold a project",
+            "choose component, native, browser, or GUI; scaffold a project",
         ),
         ("help, -h, --help", "this text"),
         ("version, -V, --version", "version"),
@@ -1672,17 +1672,17 @@ fn prompt_target() -> Result<Target> {
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         return select_target();
     }
-    print!("target [native/browser/gui/component] (native): ");
+    print!("target [component/native/browser/gui] (component): ");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     match input.trim() {
-        "" | "native" => Ok(Target::Native),
+        "" | "component" => Ok(Target::Component),
+        "native" => Ok(Target::Native),
         "browser" => Ok(Target::Browser),
         "gui" => Ok(Target::Gui),
-        "component" => Ok(Target::Component),
         other => fail(format!(
-            "unknown target `{other}`: choose native, browser, gui, or component"
+            "unknown target `{other}`: choose component, native, browser, or gui"
         )),
     }
 }
@@ -1759,10 +1759,10 @@ fn select_target() -> Result<Target> {
             KeyCode::Enter => {
                 println!();
                 return Ok(match selected {
-                    0 => Target::Native,
-                    1 => Target::Browser,
-                    2 => Target::Gui,
-                    _ => Target::Component,
+                    0 => Target::Component,
+                    1 => Target::Native,
+                    2 => Target::Browser,
+                    _ => Target::Gui,
                 });
             }
             KeyCode::Esc => {

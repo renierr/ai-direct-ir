@@ -239,14 +239,13 @@ fn repository_examples_check() {
     let _shared = examples_lock();
     let repo = repo();
     let manifests = [
-        "examples/hello/hello.toml",
-        "examples/pi/pi.toml",
+        "examples/hello/host.toml",
+        "examples/pi/host.toml",
+        "examples/prompts/host.toml",
         "examples/server/manifest.toml",
         "examples/server/mt.toml",
-        "examples/prompts/prompts.toml",
-        "examples/prompts-raw/prompts-raw.toml",
+        "examples/prompts-raw/host.toml",
         "examples/gui-hello/host.toml",
-        "examples/component-hello/host.toml",
     ];
     for manifest in manifests {
         let out = run(&repo, &["check", manifest]);
@@ -259,10 +258,36 @@ fn repository_examples_check() {
 }
 
 #[test]
+fn prompts_example_runs_scripted() {
+    let _shared = examples_lock();
+    let mut child = Command::new(host_rs())
+        .args(["run", "examples/prompts/host.toml"])
+        .current_dir(repo())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn prompts example");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"myproj\n2\n1 3\ny\n")
+        .expect("write scripted answers");
+    let out = child.wait_with_output().expect("prompts example finished");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Done: myproj on staging"),
+        "unexpected prompts output: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn pi_example_prints_the_requested_digits() {
     let _shared = examples_lock();
     let mut child = Command::new(host_rs())
-        .args(["run", "examples/pi/pi.toml"])
+        .args(["run", "examples/pi/host.toml"])
         .current_dir(repo())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -285,17 +310,11 @@ fn pi_example_prints_the_requested_digits() {
 }
 
 #[test]
-fn component_example_prints_its_greeting() {
-    let _shared = examples_lock();
-    let out = run(&repo(), &["run", "examples/component-hello/host.toml"]);
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "hello from AI-direct IR\n");
-}
-
-#[test]
 fn hello_example_prints_its_greeting() {
     let _shared = examples_lock();
-    let out = run(&repo(), &["run", "examples/hello/hello.toml"]);
+    // hello is a WASI 0.2 component: the greeting and its exact length come
+    // from the component, not from a hand-counted constant.
+    let out = run(&repo(), &["run", "examples/hello/host.toml"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "hello from AI-direct IR\n");
 }
