@@ -25,7 +25,9 @@ secrets, generated output, and local provider caches out of source control.
 ## Rules
 
 - Never install, upgrade, or remove software without explicit user consent.
-- Change source, not `__APPNAME__.wasm`; run `host-rs build` after WAT edits.
+- Change source, not `__APPNAME__.wasm`; `host-rs check`, the run command, and
+  `host-rs dist` rebuild automatically after WAT edits. Use `host-rs build` to
+  force a rebuild.
 - Run `host-rs check` before claiming an integration works.
 - __VERIFY_ACTION__ before claiming user-visible behavior works.
 - Keep `docs/01-spec.md` current with requested behavior and acceptance

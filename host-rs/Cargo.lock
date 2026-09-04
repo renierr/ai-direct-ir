@@ -1407,7 +1407,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "host-rs"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "crossterm",
  "eframe",
@@ -1415,6 +1415,7 @@ dependencies = [
  "toml 1.1.5+spec-1.1.0",
  "wasmtime",
  "wasmtime-wasi",
+ "wat",
 ]
 
 [[package]]

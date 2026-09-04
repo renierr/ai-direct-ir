@@ -152,6 +152,7 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
 
 pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     let manifest: Manifest = crate::manifest::load(path)?;
+    build_if_needed(path, &manifest)?;
     if manifest.target == Target::Browser {
         return fail(format!(
             "{path} targets a browser; build it, then serve its directory and open index.html"
@@ -193,35 +194,48 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     }
 }
 
-/// Assemble a manifest-declared WAT source without running the app.
+/// Assemble and validate a manifest-declared WAT source without spawning WABT.
 pub fn cmd_build(path: &str) -> Result<()> {
     let manifest = crate::manifest::load(path)?;
-    let source = manifest.app.source.ok_or_else(|| {
+    build_wat(path, &manifest)
+}
+
+/// Assemble only when the declared source is newer than its output, or when the
+/// output is missing. This keeps run/check/dist usable as single commands while
+/// preserving `host-rs build` as the explicit force-rebuild command.
+fn build_if_needed(path: &str, manifest: &Manifest) -> Result<()> {
+    let Some(source) = &manifest.app.source else {
+        return Ok(());
+    };
+    let base = manifest_base(path);
+    let source = manifest_path(&base, source);
+    let output = manifest_path(&base, &manifest.app.path);
+    let rebuild = match (std::fs::metadata(&source), std::fs::metadata(&output)) {
+        (Ok(source), Ok(output)) => source.modified()? > output.modified()?,
+        (Ok(_), Err(e)) if e.kind() == std::io::ErrorKind::NotFound => true,
+        (Err(e), _) => return Err(e.into()),
+        (_, Err(e)) => return Err(e.into()),
+    };
+    if rebuild {
+        build_wat(path, manifest)?;
+    }
+    Ok(())
+}
+
+fn build_wat(path: &str, manifest: &Manifest) -> Result<()> {
+    let source = manifest.app.source.as_ref().ok_or_else(|| {
         wasmtime::Error::msg(format!(
             "{path} has no [app].source; app.path `{}` is prebuilt or has no declared WAT source",
             manifest.app.path
         ))
     })?;
     let base = manifest_base(path);
-    let source = manifest_path(&base, &source);
+    let source = manifest_path(&base, source);
     let output = manifest_path(&base, &manifest.app.path);
-    let status = std::process::Command::new("wat2wasm")
-        .arg(&source)
-        .arg("-o")
-        .arg(&output)
-        .status()
-        .map_err(|e| {
-            wasmtime::Error::msg(format!(
-                "could not run wat2wasm: {e}; install wabt or build `{}` manually",
-                source.display()
-            ))
-        })?;
-    if !status.success() {
-        return Err(wasmtime::Error::msg(format!(
-            "wat2wasm failed while building `{}`",
-            source.display()
-        )));
-    }
+    let wasm = wat::parse_file(&source).map_err(|e| {
+        wasmtime::Error::msg(format!("could not assemble `{}`: {e}", source.display()))
+    })?;
+    std::fs::write(&output, wasm)?;
     println!("built {} -> {}", source.display(), output.display());
     Ok(())
 }
@@ -236,11 +250,9 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         );
     }
     let manifest = crate::manifest::load(path)?;
-    // A release starts from source when the manifest declares it. Prebuilt
+    // A release uses current source when the manifest declares it. Prebuilt
     // modules remain valid: they have no source and are checked as supplied.
-    if manifest.app.source.is_some() {
-        cmd_build(path)?;
-    }
+    build_if_needed(path, &manifest)?;
     let engine = Engine::default();
     cmd_check(&engine, path, &manifest)?;
     let base = std::fs::canonicalize(manifest_base(path))?;
@@ -556,6 +568,7 @@ pub fn cmd_inspect(engine: &Engine, path: &str) -> Result<()> {
 /// Validate a manifest end-to-end without executing: links everything and
 /// verifies the entry func signature.
 pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> Result<()> {
+    build_if_needed(manifest_path, manifest)?;
     let base = manifest_base(manifest_path);
     if manifest.target == Target::Browser {
         return check_browser(engine, manifest_path, manifest, &base);
@@ -901,6 +914,8 @@ pub fn cmd_new(name: &str) -> Result<()> {
     };
     std::fs::write(&wat, starter)?;
     std::fs::write(&toml, manifest)?;
+    let manifest: Manifest = crate::manifest::load(toml.to_str().unwrap())?;
+    build_wat(toml.to_str().unwrap(), &manifest)?;
     std::fs::write(&gitignore, include_str!("../templates/project-gitignore"))?;
     std::fs::write(
         &readme,
@@ -952,8 +967,8 @@ pub fn cmd_new(name: &str) -> Result<()> {
         ""
     };
     println!(
-        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  .gitignore{extra}\n\
-         next:\n  cd {name} && host-rs build && host-rs check{}",
+        "created {name}/:\n  {name}.wat\n  {name}.wasm\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  .gitignore{extra}\n\
+         next:\n  cd {name} && host-rs check{}",
         if target == Target::Browser {
             " && host-rs serve"
         } else {

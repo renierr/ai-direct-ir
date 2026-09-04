@@ -35,18 +35,22 @@ generically here or in the provider catalog, then consume it from the app.
 
 ### Build And Run An Application
 
-Current Core WAT projects need only these executables on `PATH`:
+Current Core WAT projects need only `host-rs` on `PATH`:
 
 | Tool | Why an application needs it |
 |---|---|
 | `host-rs` | Builds, checks, runs, and packages the project. |
-| `wat2wasm` from WABT | Assembles a declared `.wat` source into the app's Core WASM artifact. A prebuilt Core artifact does not need it. |
 
 Browser projects also need a browser to use the generated page. GUI projects
 need the native display libraries supported by the distributed `host-rs` binary.
 Application authors do not need Rust, Cargo, a Rust WASM target, or provider
 toolchains merely to edit WAT and run `host-rs build`, `check`, `run`, or
 `dist`.
+
+`host-rs new` immediately assembles the starter WAT. Later, `host-rs check`,
+`run`, and `dist` rebuild a declared WAT source when it is newer than the WASM
+artifact or the artifact is missing. `host-rs build` remains the explicit
+force-rebuild command.
 
 The planned Component Model project path adds `wasm-tools 1.257.1` only to the
 build machine when `host-rs build` must compose a root component with locally
@@ -55,9 +59,9 @@ vendored provider components. A prebuilt composed component needs only
 
 ### Changing The Harness
 
-Changing this repository requires Rust/Cargo compatible with edition 2024,
-Git, and WABT's `wat2wasm`. Component Model changes additionally require
-`wasm-tools 1.257.1`. Build and verify with:
+Changing this repository requires Rust/Cargo compatible with edition 2024 and
+Git. Component Model changes additionally require `wasm-tools 1.257.1`. Build
+and verify with:
 
 ```bash
 cargo fmt --manifest-path host-rs/Cargo.toml
@@ -66,6 +70,10 @@ cargo check --manifest-path host-rs/Cargo.toml
 ```
 
 ### `wasm-tools` Boundary
+
+`host-rs` embeds the Rust `wat` parser to assemble and validate WAT in-process.
+It encodes the module; it does not optimize it. Optimization is a separate,
+optional future `wasm-opt` stage.
 
 `wasm-tools` is an Apache-2.0 Bytecode Alliance CLI. The repository is
 AGPL-3.0-or-later; Apache-2.0 is compatible with GPLv3-family licensing, so it

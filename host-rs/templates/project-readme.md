@@ -17,7 +17,8 @@ requirements only in source comments or dependency details only in prose.
 
 ## Develop
 
-Prerequisites: `host-rs` and `wat2wasm` (from wabt) must be on `PATH`.
+Prerequisite: `host-rs` must be on `PATH`. It assembles and validates WAT
+in-process; no separate WAT compiler is required.
 
 ```bash
 host-rs build
@@ -26,11 +27,10 @@ __RUN_COMMAND__
 host-rs dist
 ```
 
-`build` writes the `[app].path` artifact from `[app].source`. `check` validates
-the compiled module without running it. Run both after every WAT or manifest
-change. `dist` runs that build/check preflight when WAT source is declared,
-then replaces the ignored `dist/` directory with a self-contained bundle ready
-to ship.
+`build` always writes the `[app].path` artifact from `[app].source`. `check`,
+the run command, and `dist` rebuild automatically when source is newer than
+the artifact or it is missing. `check` validates without running the app;
+`dist` replaces the ignored `dist/` directory with a self-contained bundle.
 
 __TARGET_WORKFLOW__
 
