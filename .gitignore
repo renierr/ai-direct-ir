@@ -6,6 +6,7 @@ native/gen/
 native/*-native
 host-rs/target/
 libs/sha256/target/
+libs/text-width/target/
 libs/sha256/Cargo.lock
 *.o
 *.cwasm
