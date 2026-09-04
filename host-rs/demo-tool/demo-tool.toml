@@ -1,8 +1,0 @@
-# demo-tool: command-mode app. Build the .wasm first:
-#   wat2wasm demo-tool.wat -o demo-tool.wasm
-# then: host-rs check demo-tool.toml && host-rs demo-tool.toml
-mode = "command"
-
-[app]
-path = "demo-tool.wasm"
-run = "_start"
