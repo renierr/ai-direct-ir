@@ -112,6 +112,105 @@
     (call $send_all (local.get $fd) (local.get $bptr) (local.get $blen))
     (drop))
 
+  ;; --- end of headers: absolute addr just past first \r\n\r\n, or 0 ---
+  (func $find_eoh (param $n i32) (result i32)
+    (local $i i32)
+    (local.set $i (i32.const 0x1000))
+    (block $nf
+      (loop $s
+        (br_if $nf (i32.gt_u (i32.add (local.get $i) (i32.const 4))
+          (i32.add (i32.const 0x1000) (local.get $n))))
+        (i32.load (local.get $i)) (i32.const 0x0A0D0A0D) (i32.eq)
+        (if (then (i32.add (local.get $i) (i32.const 4)) (return)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $s)))
+    (i32.const 0))
+
+  ;; --- Content-Length value in [0x1000, end): -1 absent, -2 malformed/huge.
+  ;; Matches the exact casing clients send ("Content-Length:"). ---
+  (func $content_len (param $end i32) (result i32)
+    (local $i i32) (local $p i32) (local $v i32) (local $c i32)
+    (local $d i32)
+    (local.set $i (i32.const 0x1000))
+    (block $no
+      (loop $s
+        (br_if $no (i32.gt_u
+          (i32.add (local.get $i) (i32.const 15)) (local.get $end)))
+        (call $eq (local.get $i) (i32.const 0xD096) (i32.const 15))
+        (if (then
+          (local.set $p (i32.add (local.get $i) (i32.const 15)))
+          (block $got
+            (loop $sp
+              (br_if $got (i32.ge_u (local.get $p) (local.get $end)))
+              (i32.load8_u (local.get $p)) (i32.const 32) (i32.ne)
+              (br_if $got)
+              (local.set $p (i32.add (local.get $p) (i32.const 1)))
+              (br $sp)))
+          (local.set $v (i32.const 0))
+          (local.set $d (i32.const 0))
+          (block $done
+            (loop $dg
+              (br_if $done (i32.ge_u (local.get $p) (local.get $end)))
+              (local.set $c (i32.load8_u (local.get $p)))
+              (br_if $done (i32.lt_u (local.get $c) (i32.const 48)))
+              (br_if $done (i32.gt_u (local.get $c) (i32.const 57)))
+              (local.set $v (i32.add (i32.mul (local.get $v)
+                (i32.const 10))
+                (i32.sub (local.get $c) (i32.const 48))))
+              (local.set $d (i32.add (local.get $d) (i32.const 1)))
+              (local.get $v) (i32.const 1000000) (i32.gt_u)
+              (if (then (i32.const -2) (return)))
+              (local.set $p (i32.add (local.get $p) (i32.const 1)))
+              (br $dg)))
+          (local.get $d) (i32.eqz)
+          (if (then (i32.const -2) (return)))
+          (local.get $v) (return)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $s)))
+    (i32.const -1))
+
+  ;; --- read full request into 0x1000 (8K cap): total bytes, -1 closed/err,
+  ;; -2 oversize/malformed (caller answers 400) ---
+  (func $read_request (param $cfd i32) (result i32)
+    (local $n i32) (local $r i32) (local $eoh i32) (local $cl i32)
+    (local $need i32)
+    (local.set $n (call $recv (local.get $cfd)
+      (i32.const 0x1000) (i32.const 8192)))
+    (local.get $n) (i32.const 0) (i32.le_s)
+    (if (then (i32.const -1) (return)))
+    (loop $more
+      (local.set $eoh (call $find_eoh (local.get $n)))
+      (local.get $eoh) (i32.eqz)
+      (if (then
+        (local.get $n) (i32.const 8192) (i32.ge_u)
+        (if (then (i32.const -2) (return)))
+        (local.set $r (call $recv (local.get $cfd)
+          (i32.add (i32.const 0x1000) (local.get $n))
+          (i32.sub (i32.const 8192) (local.get $n))))
+        (local.get $r) (i32.const 0) (i32.le_s)
+        (if (then (i32.const -1) (return)))
+        (local.set $n (i32.add (local.get $n) (local.get $r)))
+        (br $more)))
+      (local.set $cl (call $content_len (local.get $eoh)))
+      (local.get $cl) (i32.const -2) (i32.eq)
+      (if (then (i32.const -2) (return)))
+      (local.get $cl) (i32.const -1) (i32.eq)
+      (if (then (local.get $n) (return)))
+      (local.set $need (i32.add
+        (i32.sub (local.get $eoh) (i32.const 0x1000)) (local.get $cl)))
+      (local.get $need) (i32.const 8192) (i32.gt_u)
+      (if (then (i32.const -2) (return)))
+      (local.get $n) (local.get $need) (i32.ge_u)
+      (if (then (local.get $n) (return)))
+      (local.set $r (call $recv (local.get $cfd)
+        (i32.add (i32.const 0x1000) (local.get $n))
+        (i32.sub (i32.const 8192) (local.get $n))))
+      (local.get $r) (i32.const 0) (i32.le_s)
+      (if (then (i32.const -1) (return)))
+      (local.set $n (i32.add (local.get $n) (local.get $r)))
+      (br $more))
+    (local.get $n))
+
   ;; --- POST /sha256: hex-digest the request body via the Rust lib ---
   (func $hash_request (param $cfd i32) (param $n i32)
     (local $i i32) (local $bs i32) (local $blen i32)
@@ -150,16 +249,21 @@
     (drop))
 
   ;; --- serve one connection, then return (caller closes socket) ---
+  ;; Request framing: loop recv until the header terminator AND the
+  ;; declared Content-Length bytes are in. One recv is NOT enough —
+  ;; headers and body can arrive split across packets even on loopback,
+  ;; and answering a partial body then closing resets the client's send.
   (func $handle (param $cfd i32)
     (local $n i32) (local $rc i32) (local $method i32)
     (local $p i32) (local $pl i32)
     (local $flen i32) (local $errno i32) (local $ffd i32)
     (local $size i64) (local $mptr i32) (local $mlen i32)
     (local $nread i32)
-    ;; read request (single recv; requests bigger than 8K get a 400)
-    (local.set $n (call $recv (local.get $cfd)
-      (i32.const 0x1000) (i32.const 8192)))
-    (local.get $n) (i32.const 0) (i32.le_s) (if (then (return)))
+    ;; read full request (header + body), still capped at the 8K buffer
+    (local.set $n (call $read_request (local.get $cfd)))
+    (local.get $n) (i32.const -2) (i32.eq)
+    (if (then (call $err (local.get $cfd) (i32.const 400)) (return)))
+    (local.get $n) (i32.const 0) (i32.lt_s) (if (then (return)))
     (local.set $rc (call $parse_request (i32.const 0x1000) (local.get $n)
       (i32.const 0x110) (i32.const 0x114) (i32.const 0x118)))
     (local.get $rc) (i32.const 0) (i32.ne)
@@ -275,4 +379,5 @@
   (data (i32.const 0xD07B) "index.html")
   (data (i32.const 0xD085) "text/plain")
   (data (i32.const 0xD08F) "/sha256")
+  (data (i32.const 0xD096) "Content-Length:")
 )

@@ -2,6 +2,17 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Fixed the POST RST: `$read_request` loops until headers + Content-Length
+- `server.wat`: new `$find_eoh` + `$content_len` (exact-case `Content-Length:` at `0xD096`) + `$read_request` (8K cap; -1 closed, -2 oversize/malformed → 400). `$handle` uses it; rest untouched.
+- Proof: 200+200+100 rapid POSTs (3B/1K/5K) all 200, zero resets; 5KB digest matches `hashlib`; full curl matrix green; bench POST row err=0 (was 30/200), GET numbers unchanged (framing loop costs nothing when headers arrive whole).
+- Committed (`server.wat` + rebuilt tracked `server.wasm`).
+
+## 2026-09-04 — Benchmark: ~4600 rps, WASM within 0.05 ms of a Python baseline; found a real POST bug
+- `python3 /tmp/opencode/bench.py` (500+300+300+200 sequential, 8x100 concurrent) vs release `host-rs` on :8124 and a single-threaded canned-response Python baseline on :8125.
+- GET / (570B) sequential: WASM avg 0.21 ms p99 0.43, 4624 rps — baseline avg 0.16 ms p99 0.38, 5990 rps. 404 path fastest (5170 rps). 8-thread: WASM 5756 rps, baseline 5129 rps — serial accept loop, queueing, no errors on GET.
+- BUG: `POST /sha256` fails ~20% under rapid fire (`ConnectionResetError`), 0% with 20 ms gaps, any body size. Cause: `server.wat:$handle` does ONE `recv` then answers — headers and body can arrive split across packets, so it hashes a partial body, sends 200, closes mid-send → RST. GETs never trip it (no body). Fix belongs in the app (recv loop until headers + Content-Length), not the harness.
+- `python3 -m http.server` refused to stay up in this sandbox; a 20-line single-threaded `baseline.py` (canned 680B) worked fine.
+
 ## 2026-09-04 — Restructure around the harness + CLI that explains itself
 - Layout: `host-rs/src/{main,manifest,host,net,link,cmds}`, `examples/{hello,pi,server}/`, `libs/{http,sha256}/`, `tools/serve.py` (retired), `AGENTS.md` with repo rules. Examples' `.wasm` tracked as distributables; everything else generated stays ignored.
 - Harness CLI: bare `host-rs` prints help (never boots a demo); `run`/`check`/`inspect`/`init`. `inspect` shows a foreign module's imports/exports (the cross-language on-ramp); `init` scaffolds a manifest stub. Manifest paths resolve manifest-dir-first with CWD fallback — runnable from anywhere.
