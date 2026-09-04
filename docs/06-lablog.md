@@ -2,6 +2,10 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — native/gen now git-ignored (was committed by mistake)
+- Reason: generated files go stale with wasm2c versions and add 84 KB; committing them didn't even remove the wabt dependency (recipients still need `wasm-rt-*.c`). `git rm --cached`, rebuilt from scratch via `native/build.sh` to prove reproducibility, pushed.
+- Learning: generated = ignored, always; vendor explicitly if a release bundle needs to be wabt-free.
+
 ## 2026-09-04 — Repo live: github.com/renierr/ai-direct-ir (public)
 - Steps: `git init -b main`, `.gitignore` (binaries, `*.cwasm`, `*.o`; `gen/` C committed deliberately for distribution), 33 files committed (`fbfaf63`), `gh` login OK but token lacked `createRepository` → user created empty repo on web → `git remote add origin` + `git push -u origin main` succeeded.
 - Learning: `gh auth login` tokens may miss repo-creation scope; website-create + CLI-push is the reliable fallback.
