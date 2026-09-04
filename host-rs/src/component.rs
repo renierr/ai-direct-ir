@@ -13,7 +13,7 @@ use std::path::Path;
 use wasmtime::component::{Component, Instance, Linker, ResourceTable};
 use wasmtime::{Engine, Result, Store};
 use wasmtime_wasi::p2;
-use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{FsPerms, I32Exit, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::link::join;
 use crate::manifest::Manifest;
@@ -165,13 +165,27 @@ pub fn run(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<()> {
     match &linked.entry {
         Entry::Command { .. } => {
             let func = command_func(&mut linked)?;
-            let (result,) = func.call(&mut linked.store, ())?;
+            let (result,) = exit_aware(func.call(&mut linked.store, ()))?;
             result.map_err(|()| wasmtime::Error::msg("component run failed"))
         }
         Entry::Function { .. } => {
             let func = plain_func(&mut linked)?;
-            func.call(&mut linked.store, ())?;
+            exit_aware(func.call(&mut linked.store, ()))?;
             Ok(())
+        }
+    }
+}
+
+/// `wasi:cli/exit` unwinds through Wasmtime as an error carrying the status.
+/// That is a finished program, not a crash, so it must not print a backtrace.
+fn exit_aware<T>(result: Result<T>) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Some(exit) = error.downcast_ref::<I32Exit>() {
+                std::process::exit(exit.0);
+            }
+            Err(error)
         }
     }
 }

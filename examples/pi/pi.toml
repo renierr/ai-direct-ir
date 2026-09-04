@@ -1,7 +1,0 @@
-# Pi digits CLI. Run from anywhere: echo 100 | host-rs examples/pi/pi.toml
-mode = "command"
-
-[app]
-source = "pi.wat"
-path = "pi.wasm"
-run = "_start"
