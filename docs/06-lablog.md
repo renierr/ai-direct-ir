@@ -2,6 +2,12 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Workers mode: host accept loop + N instances; ceiling mapped
+- `host-rs`: `workers = N` in manifest (default 1 = legacy in-app loop). Main thread accepts, N workers with own Store/instance run `run` as `handle(cfd)`; host closes after return; trap kills a connection, not the server. `server.wat` exports `handle` alongside `run` — same `.wasm` serves `manifest.toml` and `mt.toml`.
+- Numbers: seq single 4320/0.22ms vs workers-8 3505/0.28ms (+60µs dispatch); dual 8-thread clients aggregate 9.8k single (saturated) vs 10.6k workers (headroom). True service ~0.1ms; sequential latency carries ~0.1ms of Python client overhead.
+- Debugging scars: `pgrep -f`/`pkill` patterns that appear in the wrapper's own cmdline suicide the shell (kill by numeric PID instead); a `kill $(...)` that matches the nohup substring in its own command line does the same.
+- Lesson: one Python client (even 8-thread) saturates itself ~5.7k before the server; concurrency claims need ≥2 load processes.
+
 ## 2026-09-04 — Fixed the POST RST: `$read_request` loops until headers + Content-Length
 - `server.wat`: new `$find_eoh` + `$content_len` (exact-case `Content-Length:` at `0xD096`) + `$read_request` (8K cap; -1 closed, -2 oversize/malformed → 400). `$handle` uses it; rest untouched.
 - Proof: 200+200+100 rapid POSTs (3B/1K/5K) all 200, zero resets; 5KB digest matches `hashlib`; full curl matrix green; bench POST row err=0 (was 30/200), GET numbers unchanged (framing loop costs nothing when headers arrive whole).

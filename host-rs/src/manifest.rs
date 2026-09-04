@@ -56,10 +56,23 @@ pub struct Manifest {
     pub guest: Option<String>,
     pub memory_pages: Option<u32>,
     #[serde(default)]
+    pub workers: Option<usize>,
+    #[serde(default)]
     pub libs: Vec<Lib>,
     #[serde(default)]
     pub bridges: Vec<Bridge>,
     pub app: App,
+}
+
+impl Manifest {
+    /// Worker instances for server mode (host-owned accept loop).
+    /// 1/absent = legacy: the app's own `run` owns listen+accept.
+    pub fn worker_count(&self) -> usize {
+        match self.mode {
+            Mode::Server => self.workers.unwrap_or(1).max(1),
+            Mode::Command => 1,
+        }
+    }
 }
 
 pub fn load(path: &str) -> wasmtime::Result<Manifest> {

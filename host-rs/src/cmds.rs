@@ -52,6 +52,9 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
 pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     let manifest: Manifest = crate::manifest::load(path)?;
     let base = manifest_base(path);
+    if manifest.worker_count() > 1 {
+        return run_workers(engine, path, &base);
+    }
     let mut linked = link_all(engine, &manifest, &base)?;
     if linked.is_server {
         let run =
@@ -180,6 +183,85 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
 
 fn fail<T>(msg: String) -> Result<T> {
     Err(wasmtime::Error::msg(msg))
+}
+
+/// Server with host-owned accept loop: the main thread accepts, N worker
+/// threads each own a fully linked instance and run `handle(cfd)` per
+/// connection. Blocking sockets + OS threads, std only: no async runtime,
+/// no new deps. One worker dying (trap) costs its connection, not the server.
+fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()> {
+    use crate::host::Sock;
+    use std::sync::mpsc;
+
+    let manifest: Manifest = crate::manifest::load(path)?;
+    let port = manifest.port.unwrap_or(8123);
+    let n = manifest.worker_count();
+    let entry = manifest.app.run.clone();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+        .map_err(|e| wasmtime::Error::msg(format!("bind 127.0.0.1:{port}: {e}")))?;
+    println!(
+        "serving {:?} on 127.0.0.1:{port} with {n} workers (Ctrl-C to stop)",
+        manifest.root
+    );
+    let mut txs = Vec::new();
+    for w in 0..n {
+        let (tx, rx) = mpsc::channel::<std::net::TcpStream>();
+        txs.push(tx);
+        let eng = engine.clone();
+        let mpath = path.to_string();
+        let bdir = base.to_path_buf();
+        let func = entry.clone();
+        std::thread::Builder::new()
+            .name(format!("worker-{w}"))
+            .spawn(move || {
+                let m: Manifest = match crate::manifest::load(&mpath) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("worker-{w}: manifest: {e}");
+                        return;
+                    }
+                };
+                let mut linked = match link_all(&eng, &m, &bdir) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("worker-{w}: link: {e}");
+                        return;
+                    }
+                };
+                let handle =
+                    match linked
+                        .app_inst
+                        .get_typed_func::<i32, i32>(&mut linked.store, &func)
+                    {
+                        Ok(f) => f,
+                        Err(e) => {
+                            eprintln!("worker-{w}: entry `{func}`: {e}");
+                            return;
+                        }
+                    };
+                for stream in rx {
+                    let h = linked.store.data_mut().alloc_sock(Sock::Conn(stream));
+                    if let Err(e) = handle.call(&mut linked.store, h) {
+                        eprintln!("worker-{w}: handle: {e}");
+                    }
+                    // Host closes: the handle is dropped here either way,
+                    // so a leaky app can't exhaust the socket table.
+                    linked.store.data_mut().socks.remove(&h);
+                }
+            })
+            .map_err(|e| wasmtime::Error::msg(format!("spawn worker: {e}")))?;
+    }
+    let mut i = 0usize;
+    for conn in listener.incoming() {
+        match conn {
+            Ok(c) => {
+                let _ = txs[i % n].send(c);
+                i += 1;
+            }
+            Err(e) => eprintln!("accept: {e}"),
+        }
+    }
+    Ok(())
 }
 
 /// Scaffold a manifest stub from an app module's own imports.

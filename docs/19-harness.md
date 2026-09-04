@@ -28,6 +28,9 @@ port = 8124          # server mode (default 8123)
 root = "www"            # optional preopen dir (WASI fd 3 when alone)
 guest = "www"        # optional guest name (default: root's file name)
 memory_pages = 2     # optional floor; import minima always win
+workers = 8          # server only: host-owned accept loop + N instances.
+                     # absent/1 = legacy: the app's `run` owns listen+accept.
+                     # worker mode calls `run` as handle(cfd) per connection.
 
 [[libs]]             # shared-memory libs: every export auto-wired
 path = "libs/http/http.wasm"
@@ -73,6 +76,7 @@ run = "run"          # server: run(port); command: run() e.g. _start
 | Manifest | Mode | Modules |
 |---|---|---|
 | `examples/server/manifest.toml` | server :8124 | app + http lib + sha256 bridge |
+| `examples/server/mt.toml` | server :8124, 8 workers | same modules, entry `handle` |
 | `examples/pi/pi.toml` | command | app only (`_start`, stdio) |
 | `examples/hello/hello.toml` | command | app only |
 
@@ -81,4 +85,22 @@ run = "run"          # server: run(port); command: run() e.g. _start
 - Bridge calls are fixed-arity `(in_ptr, in_len, out_ptr) -> rc`.
 - Syscalls are TCP client/server + WASI files/stdio. No UDP/timers yet.
 - Single preopen dir. Single connection at a time is the *app's* choice,
-  not the harness's.
+  not the harness's — or set `workers` and let the host parallelize.
+
+## Workers mode (host-owned accept loop)
+
+`workers = N` keeps the manifest + modules identical and changes who loops:
+the main thread accepts, N worker threads each own a fully linked instance
+(own `Store`, own `env.memory`, own WASI ctx) and run the manifest's `run`
+entry as `handle(cfd)` per connection. Blocking sockets + OS threads, std
+only — no async runtime, no new deps. The same `server.wasm` serves both
+modes (`run` owns the loop, `handle` serves one connection; the host closes
+the socket after return, so a leaky app can't exhaust the table). A
+trapping worker costs its connection, not the server — in legacy mode a
+trap kills the whole loop.
+
+Measured (loopback, same bench script): sequential single 4320 rps/0.22 ms
+vs workers 3505 rps/0.28 ms (+~60 µs channel dispatch per request), but two
+simultaneous 8-thread clients aggregate ~9.8k rps single (server saturated)
+vs ~10.6k workers (headroom left). Raw per-request service is ~0.1 ms —
+sequential latency includes ~0.1 ms of Python client overhead each side.

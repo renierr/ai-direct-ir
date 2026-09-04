@@ -353,6 +353,12 @@
         (br $rd)))
     (call $fd_close (local.get $ffd)) (drop))
 
+  ;; --- worker-mode entry: one connection, host closes after return ---
+  (func (export "handle") (param $cfd i32) (result i32)
+    (call $handle (local.get $cfd))
+    (call $close (local.get $cfd)) (drop)
+    (i32.const 0))
+
   ;; --- entry: listen forever, one connection at a time ---
   (func (export "run") (param $port i32) (result i32)
     (local $l i32) (local $c i32)
