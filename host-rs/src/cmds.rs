@@ -1,11 +1,11 @@
-//! Subcommands: build / run / check / inspect / init / help.
+//! Subcommands: build / run / serve / check / inspect / init / help.
 
 use wasmtime::{Engine, ExternType, FuncType, Result, ValType};
 
 use wasmtime_wasi::I32Exit;
 
 use crate::link::link_all;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, Target};
 
 pub fn print_help() {
     println!(
@@ -16,7 +16,8 @@ USAGE:
 
 COMMANDS:
   build [manifest.toml]         assemble app.source into app.path; defaults to host.toml
-  run [manifest.toml]           link modules and execute; defaults to host.toml
+  run [manifest.toml]           link and execute a native app; defaults to host.toml
+  serve [manifest.toml]         serve a browser app on localhost; defaults to host.toml
   <manifest.toml>               shorthand for `run`
   check [manifest.toml]         link everything, verify wiring; defaults to host.toml
   inspect <module.wasm>         show imports/exports: what a (foreign) lib
@@ -24,8 +25,7 @@ COMMANDS:
                                 languages' .wasm output
   init <app.wasm>               scaffold a host.toml stub beside the app from its
                                   own imports (never overwrites)
-  new <name>                    scaffold a project dir: <name>.wat +
-                                  host.toml + README.md + AGENTS.md
+  new <name>                    ask for native or browser, then scaffold a project dir
                                  (never overwrites)
   help, -h, --help              this text
   version, -V, --version        version
@@ -57,6 +57,11 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
 
 pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     let manifest: Manifest = crate::manifest::load(path)?;
+    if manifest.target == Target::Browser {
+        return fail(format!(
+            "{path} targets a browser; build it, then serve its directory and open index.html"
+        ));
+    }
     let base = manifest_base(path);
     if manifest.worker_count() > 1 {
         return run_workers(engine, path, &base);
@@ -123,6 +128,82 @@ pub fn cmd_build(path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Serve a browser app from its manifest directory. Browsers require HTTP to
+/// fetch WASM modules, and WebAssembly uses its own content type.
+pub fn cmd_serve(path: &str) -> Result<()> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let manifest = crate::manifest::load(path)?;
+    if manifest.target != Target::Browser {
+        return fail(format!(
+            "{path} targets native; `host-rs serve` is for browser apps"
+        ));
+    }
+    let base = std::fs::canonicalize(manifest_base(path))?;
+    let port = manifest.port.unwrap_or(8000);
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .map_err(|e| wasmtime::Error::msg(format!("bind 127.0.0.1:{port}: {e}")))?;
+    println!(
+        "serving {} at http://127.0.0.1:{port}/ (Ctrl-C to stop)",
+        base.display()
+    );
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("accept: {e}");
+                continue;
+            }
+        };
+        let mut request = [0; 4096];
+        let n = match stream.read(&mut request) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let request = String::from_utf8_lossy(&request[..n]);
+        let target = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("/");
+        let rel = target
+            .split('?')
+            .next()
+            .unwrap_or("/")
+            .trim_start_matches('/');
+        let candidate = if rel.is_empty() {
+            base.join("index.html")
+        } else {
+            base.join(rel)
+        };
+        let file = std::fs::canonicalize(&candidate)
+            .ok()
+            .filter(|file| file.starts_with(&base));
+        match file.and_then(|file| std::fs::read(&file).ok().map(|body| (file, body))) {
+            Some((file, body)) => {
+                let content_type = match file.extension().and_then(|s| s.to_str()) {
+                    Some("wasm") => "application/wasm",
+                    Some("js") => "text/javascript; charset=utf-8",
+                    Some("html") => "text/html; charset=utf-8",
+                    Some("css") => "text/css; charset=utf-8",
+                    _ => "application/octet-stream",
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(&body);
+            }
+            None => {
+                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn func_sig(t: &FuncType) -> String {
     let p: Vec<_> = t.params().map(|k| k.to_string()).collect();
     let r: Vec<_> = t.results().map(|k| k.to_string()).collect();
@@ -171,6 +252,9 @@ pub fn cmd_inspect(engine: &Engine, path: &str) -> Result<()> {
 /// verifies the entry func signature.
 pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> Result<()> {
     let base = manifest_base(manifest_path);
+    if manifest.target == Target::Browser {
+        return check_browser(engine, manifest_path, manifest, &base);
+    }
     let linked = link_all(engine, manifest, &base)?;
     let app_mod =
         wasmtime::Module::from_file(engine, crate::link::join(&base, &manifest.app.path))?;
@@ -216,6 +300,83 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
     }
     println!("check {manifest_path}: all modules linked, all imports satisfied");
     Ok(())
+}
+
+/// Browser modules are checked against the browser host ABI, not linked in
+/// Wasmtime: browser imports are implemented by the generated JavaScript host.
+fn check_browser(
+    engine: &Engine,
+    manifest_path: &str,
+    manifest: &Manifest,
+    base: &std::path::Path,
+) -> Result<()> {
+    if !matches!(manifest.mode, crate::manifest::Mode::Command) {
+        return fail("browser projects require mode = \"command\"".into());
+    }
+    if !manifest.libs.is_empty() || !manifest.bridges.is_empty() {
+        return fail("browser projects do not support [[libs]] or [[bridges]] yet".into());
+    }
+    let app_path = crate::link::join(base, &manifest.app.path);
+    let app = wasmtime::Module::from_file(engine, &app_path)?;
+    let mut needs_frame = false;
+    for import in app.imports() {
+        if import.module() != "web" {
+            return fail(format!(
+                "browser app import {}.{} is unsupported; browser projects may import only web.*",
+                import.module(),
+                import.name()
+            ));
+        }
+        if !browser_import_sig_ok(import.name(), &import.ty()) {
+            return fail(format!(
+                "browser app import web.{} has an unsupported type or is not provided by web-host.js",
+                import.name()
+            ));
+        }
+        needs_frame |= import.name() == "request_frame";
+    }
+    let entry = app.exports().find(|e| e.name() == manifest.app.run);
+    match entry {
+        Some(e) if browser_func_sig_ok(&e.ty(), 0, 0) => {}
+        Some(e) => {
+            return fail(format!(
+                "run `{}` must be a zero-argument function, found {:?}",
+                manifest.app.run,
+                e.ty()
+            ));
+        }
+        None => {
+            return fail(format!(
+                "app {} has no export `{}`",
+                manifest.app.path, manifest.app.run
+            ));
+        }
+    }
+    if needs_frame
+        && !app
+            .exports()
+            .any(|e| e.name() == "frame" && browser_func_sig_ok(&e.ty(), 0, 0))
+    {
+        return fail("web.request_frame requires an exported frame() function".into());
+    }
+    println!("run `{}`: signature ok", manifest.app.run);
+    println!("check {manifest_path}: browser imports are provided by web-host.js");
+    Ok(())
+}
+
+fn browser_func_sig_ok(ty: &ExternType, params: usize, results: usize) -> bool {
+    matches!(ty, ExternType::Func(f) if f.params().len() == params && f.results().len() == results)
+}
+
+fn browser_import_sig_ok(name: &str, ty: &ExternType) -> bool {
+    match name {
+        "canvas_width" | "canvas_height" | "mouse_x" | "mouse_y" => browser_func_sig_ok(ty, 0, 1),
+        "request_frame" => browser_func_sig_ok(ty, 0, 0),
+        "key_down" => browser_func_sig_ok(ty, 1, 1),
+        "clear" => browser_func_sig_ok(ty, 4, 0),
+        "fill_rect" => browser_func_sig_ok(ty, 8, 0),
+        _ => false,
+    }
 }
 
 fn fail<T>(msg: String) -> Result<T> {
@@ -311,6 +472,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
     {
         return fail(format!("bad project name `{name}`: use [A-Za-z0-9_-]"));
     }
+    let target = prompt_target()?;
     let dir = std::path::Path::new(name);
     if dir.exists() {
         let empty = std::fs::read_dir(dir)
@@ -326,14 +488,23 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let toml = dir.join("host.toml");
     let readme = dir.join("README.md");
     let agents = dir.join("AGENTS.md");
-    for p in [&wat, &toml, &readme, &agents] {
+    let index = dir.join("index.html");
+    let web_host = dir.join("web-host.js");
+    let mut files = vec![&wat, &toml, &readme, &agents];
+    if target == Target::Browser {
+        files.extend([&index, &web_host]);
+    }
+    for p in files {
         if p.exists() {
             return fail(format!("`{}` exists, refusing to overwrite", p.display()));
         }
     }
     let hello = format!("hello from {name}\n");
-    let starter = format!(
-        ";; {name}.wat — {name} app, hosted by host-rs.\n\
+    let (starter, manifest) = if target == Target::Browser {
+        browser_starter(name)
+    } else {
+        let starter = format!(
+            ";; {name}.wat — {name} app, hosted by host-rs.\n\
          ;; Build: host-rs build\n\
          ;; Check: host-rs check\n\
          ;; Run:   host-rs run\n\
@@ -362,14 +533,14 @@ pub fn cmd_new(name: &str) -> Result<()> {
          \n\
          \x20 (data (i32.const 0x1000) \"{hello}\")\n\
          )\n",
-        name = name,
-        // WAT string syntax needs an escaped newline, not a literal one;
-        // otherwise the byte count includes a byte absent from the data.
-        hello = hello.escape_default(),
-        hlen = hello.len()
-    );
-    let manifest = format!(
-        "# {name}: command-mode app. Build, check, then run:\n\
+            name = name,
+            // WAT string syntax needs an escaped newline, not a literal one;
+            // otherwise the byte count includes a byte absent from the data.
+            hello = hello.escape_default(),
+            hlen = hello.len()
+        );
+        let manifest = format!(
+            "# {name}: command-mode app. Build, check, then run:\n\
          #   host-rs build && host-rs check && host-rs run\n\
          mode = \"command\"\n\
          \n\
@@ -377,7 +548,9 @@ pub fn cmd_new(name: &str) -> Result<()> {
          source = \"{name}.wat\"\n\
          path = \"{name}.wasm\"\n\
          run = \"_start\"\n"
-    );
+        );
+        (starter, manifest)
+    };
     std::fs::write(&wat, starter)?;
     std::fs::write(&toml, manifest)?;
     std::fs::write(
@@ -388,11 +561,73 @@ pub fn cmd_new(name: &str) -> Result<()> {
         &agents,
         include_str!("../templates/project-agents.md").replace("__APPNAME__", name),
     )?;
+    if target == Target::Browser {
+        std::fs::write(&index, include_str!("../templates/browser-index.html"))?;
+        std::fs::write(
+            &web_host,
+            include_str!("../templates/browser-host.js").replace("__APPNAME__", name),
+        )?;
+    }
+    let extra = if target == Target::Browser {
+        "\n  index.html\n  web-host.js"
+    } else {
+        ""
+    };
     println!(
-        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n\
-         next:\n  cd {name} && host-rs build && host-rs check && host-rs run"
+        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md{extra}\n\
+         next:\n  cd {name} && host-rs build && host-rs check{}",
+        if target == Target::Browser {
+            " && host-rs serve"
+        } else {
+            " && host-rs run"
+        }
     );
     Ok(())
+}
+
+fn prompt_target() -> Result<Target> {
+    use std::io::{self, Write};
+    print!("target [native/browser] (native): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    match input.trim() {
+        "" | "native" => Ok(Target::Native),
+        "browser" => Ok(Target::Browser),
+        other => fail(format!(
+            "unknown target `{other}`: choose native or browser"
+        )),
+    }
+}
+
+fn browser_starter(name: &str) -> (String, String) {
+    let starter = format!(
+        ";; {name}.wat -- Canvas app hosted by web-host.js.\n\
+         ;; Build: host-rs build\n\
+         ;; Check: host-rs check\n\
+         ;; Run: serve this directory and open index.html.\n\
+         ;; web.* is the browser ABI: keep app state in WASM and drawing explicit.\n\
+         \n\
+         (module\n\
+         \x20 (import \"web\" \"clear\" (func $clear (param i32 i32 i32 i32)))\n\
+         \x20 (import \"web\" \"fill_rect\" (func $fill_rect (param i32 i32 i32 i32 i32 i32 i32 i32)))\n\
+         \x20 (func (export \"start\")\n\
+         \x20   (call $clear (i32.const 20) (i32.const 24) (i32.const 35) (i32.const 255))\n\
+         \x20   (call $fill_rect (i32.const 48) (i32.const 48) (i32.const 320) (i32.const 160)\n\
+         \x20     (i32.const 67) (i32.const 151) (i32.const 255) (i32.const 255)))\n\
+         )\n"
+    );
+    let manifest = format!(
+        "# {name}: browser Canvas app.\n\
+         target = \"browser\"\n\
+         mode = \"command\"\n\
+         \n\
+         [app]\n\
+         source = \"{name}.wat\"\n\
+         path = \"{name}.wasm\"\n\
+         run = \"start\"\n"
+    );
+    (starter, manifest)
 }
 
 /// Scaffold a manifest stub from an app module's own imports.

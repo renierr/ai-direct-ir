@@ -39,11 +39,16 @@ fn main() -> Result<()> {
         }
         "check" => {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
-            cmds::cmd_check(&engine, path, &manifest::load(path)?)
+            let manifest = manifest::load(path)?;
+            cmds::cmd_check(&engine, path, &manifest)
         }
         "build" => {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
             cmds::cmd_build(path)
+        }
+        "serve" => {
+            let path = if arg1.is_empty() { "host.toml" } else { arg1 };
+            cmds::cmd_serve(path)
         }
         "init" => {
             if arg1.is_empty() {

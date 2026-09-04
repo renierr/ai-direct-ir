@@ -1,10 +1,8 @@
 # __APPNAME__
 
-`__APPNAME__` is a WebAssembly app hosted by
-[`host-rs`](https://github.com/renierr/ai-direct-ir): a native harness that
-links configured WASM modules, grants only declared capabilities, and runs the
-app. The app is written as readable WebAssembly Text (`.wat`); its compiled
-`.wasm` is portable, while the `host-rs` binary is built per operating system.
+`__APPNAME__` is a WebAssembly app scaffolded by
+[`host-rs`](https://github.com/renierr/ai-direct-ir). The app is written as
+readable WebAssembly Text (`.wat`); its compiled `.wasm` is portable.
 
 ## Quick Start
 
@@ -21,6 +19,10 @@ host-rs run
 configured module but does not execute it. `build`, `check`, and `run` use
 `host.toml` automatically when invoked inside this directory.
 
+Browser projects include `index.html` and `web-host.js`. Run `host-rs serve`
+and open the displayed localhost URL; it serves WASM with the required MIME
+type. `host-rs run` is for native projects only.
+
 ## Project Files
 
 | File | Purpose |
@@ -28,6 +30,7 @@ configured module but does not execute it. `build`, `check`, and `run` use
 | `__APPNAME__.wat` | App source: AI-generated, human-reviewable WASM IR. |
 | `__APPNAME__.wasm` | Assembled app artifact. Rebuild with `host-rs build` after changing WAT. |
 | `host.toml` | Manifest: app mode, module paths, libraries, bridges, entry function. |
+| `index.html` / `web-host.js` | Browser target only: page and the trusted `web.*` capability host. |
 | `AGENTS.md` | Rules and workflow for agents modifying this app. |
 
 ## Harness Model
@@ -36,6 +39,12 @@ The manifest is the integration boundary. An app imports the capabilities and
 libraries it needs; `host-rs` validates and wires those imports to host
 syscalls or another module's exports. A new application normally requires no
 harness rebuild, only its `.wat`, `.wasm`, and TOML manifest.
+
+For a browser target, the browser implements the small `web.*` ABI in
+`web-host.js`. The initial ABI has Canvas drawing (`clear`, `fill_rect`), canvas
+size, keyboard state, pointer coordinates, and animation-frame scheduling.
+Keep application state and policy in WAT. Add a host capability deliberately;
+do not use arbitrary JavaScript evaluation as an app API.
 
 Start from a foreign or Cargo-produced module with:
 

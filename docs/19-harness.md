@@ -1,8 +1,10 @@
 # The generic harness (`host-rs`)
 
-One native binary runs every app in this repo. A new project = a TOML
-manifest + `.wasm` files. The harness is never rebuilt for a new app —
-exactly the "config, not code" property the user asked for.
+One CLI builds and validates every app in this repo. Native apps run through
+the bundled Wasmtime host; browser apps run through a generated JavaScript
+host. A new project = a TOML manifest + `.wasm` files. The harness is never
+rebuilt for a new app — exactly the "config, not code" property the user asked
+for.
 
 ## Run
 
@@ -26,12 +28,27 @@ host-rs check
 host-rs run
 ```
 
+Browser scaffold workflow:
+
+```bash
+host-rs build
+host-rs check
+host-rs serve
+```
+
+`host-rs new name` asks which host to scaffold: `native` (the default) or
+`browser`. A browser project gets `index.html` and a baked-in `web-host.js`;
+after `build` and `check`, use `host-rs serve` to serve its directory on
+localhost with the required WASM MIME type. `host-rs run` only executes native
+apps.
+
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
 per-OS (25 MB release); the `.wasm` files are portable.
 
 ## Manifest reference
 
 ```toml
+target = "native"    # optional default; or "browser"
 mode = "server"      # or "command"
 port = 8124          # server mode (default 8123)
 root = "www"            # optional preopen dir (WASI fd 3 when alone)
@@ -64,6 +81,30 @@ source = "server.wat" # optional: WAT source for `host-rs build`
 path = "server.wasm"
 run = "run"          # server: run(port); command: run() e.g. _start
 ```
+
+## Browser host
+
+Set `target = "browser"` and `mode = "command"` for a browser app. Browser
+apps currently cannot use native `[[libs]]`, `[[bridges]]`, WASI, terminal, or
+network imports. `host-rs check` validates the compiled module's imports
+against the generated `web-host.js` instead of linking it in Wasmtime.
+
+The initial `web.*` ABI is intentionally small:
+
+| Import | Contract |
+|---|---|
+| `canvas_width()`, `canvas_height()` | Canvas pixel dimensions |
+| `clear(r, g, b, a)` | Fill the full canvas with RGBA bytes |
+| `fill_rect(x, y, width, height, r, g, b, a)` | Draw a filled RGBA rectangle |
+| `request_frame()` | Schedule exported `frame()` on the next animation frame |
+| `key_down(key)` | Whether a known key is down: left/right/up/down/space are 0-4 |
+| `mouse_x()`, `mouse_y()` | Pointer location in canvas pixels |
+
+The generated app must export the manifest's zero-argument `run` function
+(normally `start`). If it imports `request_frame`, it must export a compatible
+zero-argument `frame` function. Extend this ABI in `web-host.js` and browser
+checking together, once, rather than creating per-app arbitrary JavaScript
+bindings.
 
 ## What the harness does, in order
 

@@ -1,8 +1,8 @@
 # AGENTS.md — rules for coding agents in `__APPNAME__`
 
-This directory is a WASM app hosted by `host-rs` (a generic harness that
-links + runs configured WASM modules — see the harness repo,
-`docs/19-harness.md`). AI writes the IR (`.wat`); the harness runs it.
+This directory is a WASM app scaffolded by `host-rs` (see the harness repo,
+`docs/19-harness.md`). AI writes the IR (`.wat`); the selected native or
+browser host supplies declared capabilities.
 
 ## Hard rules
 
@@ -23,6 +23,7 @@ links + runs configured WASM modules — see the harness repo,
 - `__APPNAME__.wat` — the app (memory map in the file header comment)
 - `host.toml` — manifest: mode, libs/bridges, entry func
 - `__APPNAME__.wasm` — assembled artifact (rebuild after every edit)
+- `index.html` / `web-host.js` — browser projects only: page and trusted host
 
 ## Build / run
 
@@ -32,6 +33,9 @@ host-rs check                    # link + verify host.toml, do NOT execute
 host-rs run                      # run host.toml
 host-rs inspect __APPNAME__.wasm # what it needs and offers
 ```
+
+For a browser project, use `host-rs serve` after `build` and `check`, then open
+its localhost URL; `host-rs run` intentionally only runs native projects.
 
 ## Conventions
 
@@ -48,5 +52,8 @@ host-rs inspect __APPNAME__.wasm # what it needs and offers
 - Text layout: UTF-8 byte length is not terminal display width (especially
   with ANSI escapes and Unicode). For centered/aligned terminal text, use a
   compatible width library through a bridge; the harness example is
-  `libs/text-width/` (`unicode-width`) with `examples/prompts-raw/`.
+   `libs/text-width/` (`unicode-width`) with `examples/prompts-raw/`.
+- Browser ABI: import only `web.*` capabilities declared in `web-host.js`.
+  Canvas primitives are deliberate host calls; never add arbitrary JavaScript
+  evaluation or browser APIs to WAT without extending and validating the host.
 - Commit messages: short imperative summary.

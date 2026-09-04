@@ -9,6 +9,19 @@ pub enum Mode {
     Command,
 }
 
+/// The host implementation an app targets. Native remains the default so
+/// existing manifests continue to run under Wasmtime.
+#[derive(Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Target {
+    Native,
+    Browser,
+}
+
+fn default_target() -> Target {
+    Target::Native
+}
+
 #[derive(Deserialize)]
 pub struct Lib {
     pub path: String,
@@ -52,6 +65,8 @@ pub struct App {
 
 #[derive(Deserialize)]
 pub struct Manifest {
+    #[serde(default = "default_target")]
+    pub target: Target,
     pub mode: Mode,
     pub port: Option<u16>,
     pub root: Option<String>,
