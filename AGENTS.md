@@ -80,8 +80,11 @@ Start with `host-rs inspect <file>`.
   Named segments need a literal offset and may not overlap.
 - Manifest per app, next to its modules; `host-rs init` scaffolds it. Name it
   `host.toml` so the project directory is the argument.
-- Prefer `target = "component"` (WASI 0.2) for new work. Reach for `native`
-  (Preview 1) only for sockets, raw terminal, `ui.*`, or Core providers.
+- Prefer `target = "component"` (WASI 0.2) for new work; it is the default and
+  is inferred from the artifact, so a manifest rarely states it. Reach for
+  `native` (Preview 1) only for Core providers or a pointer-passing host ABI.
+- A component consumes another component through `[[providers]]`, wired at link
+  time. No composition tool is involved.
 - Commit messages: short imperative summary.
 - **Never commit or push without an explicit request.** Finishing a unit of
   work is not a request. Leave changes in the working tree, report what

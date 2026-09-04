@@ -34,8 +34,12 @@ tradeoffs, platform limits, and a recommendation.
 
 ## Current Harness State
 
-`host-rs` is version `1.0.2`. It embeds the Rust `wat` parser, so a Core WAT
-application needs only `host-rs` on `PATH`. `new` creates and assembles a
+`host-rs` is version `1.0.2`. It embeds the Rust `wat` parser, so an
+application needs only `host-rs` on `PATH`, whether it is Core WAT or a
+component. A manifest does not have to declare `target`: the artifact's
+preamble says whether it is a component (layer `0d 00`) or a Core module
+(layer `01 00`), and an explicit `target` that disagrees is an error rather
+than a confusing failure inside the wrong linker. `new` creates and assembles a
 starter; `build` forces assembly; `check`, `run`, and `dist` rebuild missing or
 stale root/fragment WAT, validate, then continue.
 
@@ -51,23 +55,27 @@ line or a Core function index back to authored source.
 | `native` | Wasmtime, WASI Preview 1, experimental `term.*`/`net.*`, and declared Core providers. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
 | `gui` | Native egui `ui.*` host and declared Core providers. |
-| `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. **The default for new projects.** No provider composition yet. |
+| `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. Consumes provider components through `[[providers]]`. **The default for new projects.** |
 
 `hello`, `pi`, and `prompts` are WASI 0.2 components. The other three stay on
 Core WASM, for three different reasons worth keeping straight:
 
-- `server` is blocked by its providers, not by WASI. `wasi:sockets` and
-  `wasi:filesystem` both exist in 0.2, so its `net.*` and `path_open` use is a
-  rewrite. Its `[[libs]]`/`[[bridges]]` entries are the real blocker: those link
-  prebuilt Core modules, which a component cannot do without composition.
-- `prompts-raw` is blocked by WASI itself. `wasi:cli/terminal-input` is an
-  empty resource — it reports that stdin is a terminal and offers no method to
-  set raw mode or read a key. There is nothing to port `term.*` onto.
-- `gui-hello` is not a WASI question at all. `ui.*` is a project-owned egui
-  ABI and would remain a custom host interface under either generation.
+None of the three is blocked by WASI lacking an interface, which is what an
+earlier version of this document claimed:
 
-Preview 1 is therefore not deprecated. It is the escape hatch for capabilities
-0.2 does not cover, and for Core providers until composition exists.
+- `server` needs its `[[libs]]`/`[[bridges]]` providers as *components*. Those
+  entries link prebuilt Core modules by sharing raw memory, which a component
+  cannot do. `wasi:sockets` and `wasi:filesystem` exist, so the rest is a
+  rewrite.
+- `prompts-raw` needs `term.*`, which components can now import as
+  `ai-direct:host/term`, and `bridge.text_width`, which is a prebuilt Core
+  module from a Rust crate. The bridge is what is left.
+- `gui-hello` needs `ui.*` as a value-based interface. `ui.*` is a
+  project-owned egui ABI either way; only its pointer-passing signatures stop
+  it from crossing.
+
+Preview 1 is therefore not deprecated. It stays the path for Core providers,
+and for host ABIs that still pass raw pointers.
 
 Core project-owned providers currently use experimental `[[libs]]` (shared
 memory) or `[[bridges]]` (copying adapter) manifest entries. Their exports are
@@ -170,8 +178,11 @@ rebuild.
 ## Current Gaps
 
 - No WIT conformance check (`wasm-tools component targets`) in `host-rs`.
-- The `component` target runs one component. It cannot yet consume a provider
-  component, because that needs composition (see the open decision).
+- No build-time composition, so a component app ships alongside its providers
+  rather than as one fused artifact, and resource handles cannot cross a
+  provider boundary.
+- `ui.*` and `net.*` are not available to components: their signatures pass
+  raw pointers and need value-based replacements first.
 - Validation-error mapping to source lines is Core-module-only in practice: a
   component with several core modules reports the module index, but the include
   map only tracks one function-index space per module.
@@ -256,27 +267,43 @@ a Core linker import: WIT requires the canonical ABI and Components use a
 distinct linking domain. A component boundary has to be an explicit target, not
 a new import namespace bolted onto the Core path.
 
-### The Open Composition Decision
+### Provider Linking, And What Composition Would Still Add
 
-The component text format has **no** form for embedding a prebuilt `.wasm`
-(`(core module $m binary "...")` is rejected). So a root component WAT can wire
-modules and components it declares inline, but cannot reference a vendored
-provider binary. Composing against prebuilt providers needs one of:
+A component app can consume another component today. `[[providers]]` names a
+provider component; `host-rs` instantiates it and forwards its exported
+functions into the application's linker with `LinkerInstance::func_new`. No
+external tool, no new dependency. `examples/provider-demo/` proves it: a string
+crosses consumer to host to provider and back.
 
-| Option | Cost |
-|---|---|
-| External `wac` CLI | A build-machine tool that is not installed here; breaks "an app needs only `host-rs`". |
-| In-process composition crate | A new harness dependency; keeps the single-binary property. |
-| Emit the composition ourselves | No dependency, most work, most to maintain. |
+That is *runtime linking*, not composition, and the difference is what ships:
 
-`wasm-tools compose` is **not** an option: it still runs in 1.257.1 but prints
-`has been deprecated. Please use wac instead.` This decision is deliberately
-deferred until a real provider exists to compose. Nothing else in the plan is
-blocked by it.
+| | Runtime linking (works now) | Build-time composition |
+|---|---|---|
+| Needs | nothing | an external composer |
+| Ships | app + provider `.wasm` + manifest | one fused `.wasm` |
+| Runs under plain `wasmtime run` | no | yes |
+| Resource handles across the boundary | no | yes |
+| Plain values (`list<u8>`, `string`, records) | yes | yes |
 
-`wasm-tools 1.257.1` stays an optional external cross-check — `validate`,
-`component wit`, `component targets` — never a runtime dependency or a `dist/`
-artifact.
+So composition is no longer blocking provider work; it buys a single
+distributable artifact and handle passing. When it is wanted, the mechanism is
+still open: the component text format has no form for embedding a prebuilt
+`.wasm` (`(core module $m binary "...")` is rejected), and `wasm-tools compose`
+prints `has been deprecated. Please use wac instead.`, so the candidates are an
+external `wac`, an in-process composition crate, or emitting the composition
+directly. None is worth adopting until a released provider needs one of the two
+things runtime linking cannot do.
+
+### Custom Host Interfaces
+
+A component imports a project-owned interface exactly as it imports a WASI one;
+the harness supplies it through the component linker. `ai-direct:host/term`
+exposes the terminal capability that Core apps reach through `term.*`.
+
+`ui.*` and `net.*` have not followed, for a reason that is not about WASI:
+their Core signatures pass pointers into guest memory, which has no meaning
+across a component boundary. They need value-based signatures (`string`,
+`list<u8>`) first. That is a redesign, not a blocker.
 
 ## Why WASI And The Component Model
 
@@ -334,23 +361,25 @@ being specification-only before more specification is written.
 
 1. Build the first provider package in `ai-direct-ir-providers`: SHA-256 with
    WIT, provenance, license notice, component artifact, hash, and a conformance
-   test. The provider's own component can be hand-authored the way
-   `examples/component-hello/` is, which avoids needing a Rust component
-   toolchain at all; `libs/sha256/` remains the reference implementation to
-   check the result against. This falsifies the catalog's format documents
-   cheaply, before more are written against no evidence.
-2. Decide the composition mechanism, once step 1 produces something to compose.
-   See The Open Composition Decision. This is now the only thing standing
-   between the component target and a real provider consumer.
-3. Generate the WASI/WIT interface boundary from a `.wit` file. The examples
+   test. It can be hand-authored the way `examples/provider-demo/` is, so no
+   Rust component toolchain is needed; `libs/sha256/` stays the reference to
+   check the result against. Runtime provider linking already consumes it.
+2. Generate the WASI/WIT interface boundary from a `.wit` file. The examples
    prove it is writable by hand, and that it is the most error-prone and most
    duplicated part of an otherwise ordinary Core WAT program: three examples
    carry the same ~60 lines. It is mechanically derivable, which is the same
    argument that produced named data segments.
-4. Add a separate component consumer proof. Do not force the existing Core WAT
-   mail app to call a WIT component without an explicit component boundary.
-5. After the component path works, present SQLite candidates for approval;
-   only then add a generic writable data capability and `mail-store` provider.
+3. Give `ui.*` and `net.*` value-based signatures so components can import
+   them, then convert `gui-hello`. `term.*` already made the trip as
+   `ai-direct:host/term`.
+4. Decide build-time composition only when a released provider needs a single
+   fused artifact or handle passing. See Provider Linking above.
+5. Add a separate component consumer proof in the mail example. Do not force
+   the existing Core WAT app to call a WIT component without an explicit
+   component boundary.
+6. After the component path works end to end, present SQLite candidates for
+   approval; only then add a generic writable data capability and a
+   `mail-store` provider.
 
 ## Maintenance
 

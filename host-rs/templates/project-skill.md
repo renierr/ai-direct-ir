@@ -73,6 +73,21 @@ failed run. For an exit from deep inside the program, where a return cannot
 reach, import `wasi:cli/exit` (`exit: func(status: result)`), the direct
 replacement for Preview 1's `proc_exit`.
 
+**Consume a provider.** Declare it in the manifest and import its interface
+like any other:
+
+```toml
+[[providers]]
+source = "provider.wat"
+path = "provider.wasm"
+```
+
+`host-rs` instantiates the provider and forwards its exports into your imports.
+Plain values cross freely; resource handles do not, because each component
+instance owns its own table. The project's own capabilities arrive the same
+way: `ai-direct:host/term` is the terminal, imported exactly like a WASI
+interface.
+
 Read the WIT for an interface before declaring it. It ships with Wasmtime:
 `wasmtime-wasi-*/src/p2/wit/deps/{cli,io,filesystem,sockets}.wit`.
 

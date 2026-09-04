@@ -97,14 +97,34 @@ which is the same claim this project makes about Core WASM. It is heavier than
 WASI Preview 1's flat integer imports, but it needs no bindings generator and
 no language toolchain.
 
-`target = "native"` (Core WASM on WASI Preview 1) remains supported and is still
-required for capabilities the component path does not have yet:
+A manifest does not have to declare `target`. The artifact's own preamble says
+whether it is a component (layer `0d 00`) or a Core module (`01 00`); declaring
+one that disagrees is an error rather than a confusing failure later.
 
-| Example | Why it is still Core |
-|---|---|
-| `server` | its `[[libs]]`/`[[bridges]]` providers are prebuilt Core modules, which a component cannot link without composition. `wasi:sockets` and `wasi:filesystem` do exist, so the rest is a rewrite, not a blocker |
-| `prompts-raw` | raw-mode terminal. `wasi:cli/terminal-input` is an empty resource: it tells you stdin is a terminal and offers no method to configure or read it |
-| `gui-hello` | `ui.*` is a project-owned egui ABI, not WASI at all |
+`target = "native"` (Core WASM on WASI Preview 1) remains supported, and is
+still what `server`, `prompts-raw`, and `gui-hello` use — in each case because
+of a prebuilt Core provider or a pointer-passing host ABI, not because WASI 0.2
+lacks an interface. See `docs/PROJECT.md`.
+
+### Providers
+
+A component can consume another component:
+
+```toml
+[[providers]]
+source = "provider.wat"
+path = "provider.wasm"
+```
+
+`host-rs` instantiates the provider and forwards its exported functions into
+the application's imports at link time. No composition tool, no new dependency
+— see `examples/provider-demo/`. The trade is that the bundle ships both
+components rather than one fused artifact, and resource handles do not cross
+the boundary; plain values do.
+
+A component may also import the project's own capabilities under a WIT
+interface name, exactly as it imports a WASI one. `ai-direct:host/term` offers
+the terminal capability that Core apps reach through `term.*`.
 
 `wasm-tools` remains useful only for checks the harness does not implement:
 
@@ -146,7 +166,7 @@ the target and its linker to be installed separately.
 
 - `host-rs/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`net`/`link`/`cmds` modules)
 - `host-rs/tests/cli.rs` — end-to-end tests that run the real binary
-- `examples/{hello,pi,prompts}/` — WASI 0.2 components; `examples/{server,prompts-raw,gui-hello}/` — Core WASM. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
+- `examples/{hello,pi,prompts,provider-demo}/` — WASI 0.2 components; `examples/{server,prompts-raw,gui-hello}/` — Core WASM. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 
