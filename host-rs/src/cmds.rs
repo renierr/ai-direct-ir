@@ -212,10 +212,15 @@ fn build_if_needed(engine: &Engine, path: &str, manifest: &Manifest) -> Result<(
     let output = manifest_path(&base, &manifest.app.path);
     let rebuild = match (std::fs::metadata(&source), std::fs::metadata(&output)) {
         (Ok(source_metadata), Ok(output)) => {
+            // `>=`, not `>`: a source written in the same timestamp tick as the
+            // artifact must still rebuild. Editors are slow enough for `>` to
+            // look correct; an agent writing a fragment and running it straight
+            // away is not, and a skipped rebuild silently runs stale code. A
+            // tie only ever costs one extra rebuild.
             let output_time = output.modified()?;
-            let mut rebuild = source_metadata.modified()? > output_time;
+            let mut rebuild = source_metadata.modified()? >= output_time;
             for fragment in expand_wat(&source)?.includes {
-                rebuild |= std::fs::metadata(fragment)?.modified()? > output_time;
+                rebuild |= std::fs::metadata(fragment)?.modified()? >= output_time;
             }
             rebuild
         }
