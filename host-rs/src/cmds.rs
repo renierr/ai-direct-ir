@@ -2,44 +2,133 @@
 
 use wasmtime::{Engine, ExternType, FuncType, Result, ValType};
 
+use crossterm::{
+    execute,
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+};
+use std::io::{IsTerminal, Write};
 use wasmtime_wasi::I32Exit;
 
 use crate::link::link_all;
 use crate::manifest::{Manifest, Target};
 
 pub fn print_help() {
-    println!(
-        "host-rs {} — link + host configured WASM apps (see docs/19-harness.md)
-
-USAGE:
-  host-rs [command] [args]      use host.toml in a project directory or pass a path
-
-COMMANDS:
-  build [manifest.toml]         assemble app.source into app.path; defaults to host.toml
-  run [manifest.toml]           link and execute a native app; defaults to host.toml
-  serve [manifest.toml]         serve a browser app on localhost; defaults to host.toml
-  <manifest.toml>               shorthand for `run`
-  check [manifest.toml]         link everything, verify wiring; defaults to host.toml
-  inspect <module.wasm>         show imports/exports: what a (foreign) lib
-                                needs and offers — start here for other
-                                languages' .wasm output
-  init <app.wasm>               scaffold a host.toml stub beside the app from its
-                                  own imports (never overwrites)
-  new <name>                    ask for native or browser, then scaffold a project dir
-                                 (never overwrites)
-  help, -h, --help              this text
-  version, -V, --version        version
-
-EXAMPLES:
-  host-rs new myapp                 # choose native or browser
-  cd myapp && host-rs build
-  host-rs check                      # validate host.toml and the compiled app
-  host-rs run                        # native project
-  host-rs serve                      # browser project
-  host-rs inspect external-lib.wasm  # inspect a prebuilt module's ABI
-  host-rs init existing-app.wasm     # write a host.toml stub beside it",
-        env!("CARGO_PKG_VERSION")
+    let mut out = std::io::stdout();
+    let color = out.is_terminal();
+    if color {
+        let _ = execute!(
+            out,
+            SetForegroundColor(Color::Cyan),
+            SetAttribute(Attribute::Bold),
+            Print("host-rs"),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print(format!(
+                " {} -- build, validate, and run native or browser WASM projects\n",
+                env!("CARGO_PKG_VERSION")
+            )),
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "host-rs {} -- build, validate, and run native or browser WASM projects",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    help_section(&mut out, color, "USAGE");
+    let _ = writeln!(
+        out,
+        "  host-rs [command] [args]      use host.toml in a project directory or pass a path"
     );
+    help_section(&mut out, color, "COMMANDS");
+    for (command, description) in [
+        (
+            "build [manifest.toml]",
+            "assemble app.source into app.path; defaults to host.toml",
+        ),
+        (
+            "run [manifest.toml]",
+            "link and execute a native app; defaults to host.toml",
+        ),
+        (
+            "serve [manifest.toml]",
+            "serve a browser app on localhost; defaults to host.toml",
+        ),
+        ("<manifest.toml>", "shorthand for `run`"),
+        (
+            "check [manifest.toml]",
+            "link everything, verify wiring; defaults to host.toml",
+        ),
+        (
+            "inspect <module.wasm>",
+            "show imports/exports for a prebuilt module",
+        ),
+        (
+            "init <app.wasm>",
+            "write a non-overwriting host.toml stub beside an app",
+        ),
+        (
+            "new <name>",
+            "choose native or browser, then scaffold a project",
+        ),
+        ("help, -h, --help", "this text"),
+        ("version, -V, --version", "version"),
+    ] {
+        help_line(&mut out, color, command, description);
+    }
+    help_section(&mut out, color, "EXAMPLES");
+    for (command, description) in [
+        ("host-rs new myapp", "choose native or browser"),
+        ("cd myapp && host-rs build", ""),
+        ("host-rs check", "validate host.toml and the compiled app"),
+        ("host-rs run", "native project"),
+        ("host-rs serve", "browser project"),
+        (
+            "host-rs inspect external-lib.wasm",
+            "inspect a prebuilt module's ABI",
+        ),
+        (
+            "host-rs init existing-app.wasm",
+            "write a host.toml stub beside it",
+        ),
+    ] {
+        help_line(&mut out, color, command, description);
+    }
+}
+
+fn help_section(out: &mut std::io::Stdout, color: bool, title: &str) {
+    let _ = writeln!(out);
+    if color {
+        let _ = execute!(
+            out,
+            SetForegroundColor(Color::Yellow),
+            SetAttribute(Attribute::Bold),
+            Print(title),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print(":\n"),
+        );
+    } else {
+        let _ = writeln!(out, "{title}:");
+    }
+}
+
+fn help_line(out: &mut std::io::Stdout, color: bool, command: &str, description: &str) {
+    if color {
+        let _ = execute!(
+            out,
+            Print("  "),
+            SetForegroundColor(Color::Green),
+            Print(format!("{command:<34}")),
+            ResetColor,
+            SetForegroundColor(Color::DarkGrey),
+            Print(description),
+            ResetColor,
+            Print("\n"),
+        );
+    } else {
+        let _ = writeln!(out, "  {command:<34}{description}");
+    }
 }
 
 /// Directory a manifest's relative paths resolve against.
