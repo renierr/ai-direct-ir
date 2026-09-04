@@ -1,5 +1,20 @@
-# Raw-key select: import `term.*`; requires an interactive terminal.
+# Responsive raw-key setup UI: WAT state + Rust unicode-width bridge.
+# Requires an interactive terminal; run the scriptable prompts example for pipes.
 mode = "command"
+
+[[bridges]]
+path = "../../libs/text-width/text_width.wasm"
+as = "bridge"
+alloc = "text_width_alloc"
+
+[[bridges.calls]]
+as = "text_width"
+func = "text_width_utf8"
+in_ptr = 0
+in_len = 1
+out_ptr = 2
+out_len = 4
+max_in = 128
 
 [app]
 path = "prompts-raw.wasm"

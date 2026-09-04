@@ -1,101 +1,126 @@
-;; prompts-raw.wat — raw-terminal Clack-style select using host `term.*`.
-;;
-;; Imports are the reusable terminal ABI: available, enter/exit alternate
-;; screen + raw mode, clear, read_key. stdout remains WASI fd_write because
-;; text is still just bytes. Arrow up/down chooses; Enter confirms; Escape or
-;; Ctrl-C cancels. The Host Drop guard restores the terminal on a trap too.
-;; Memory map: 0x00 iov, 0x08 nwritten, 0x1000 strings.
-
+;; Responsive raw-terminal setup flow. WAT owns state/navigation; `bridge`
+;; calls Rust unicode-width so UTF-8 display widths, not byte counts, center
+;; the title. Arrows move, Space toggles features, Enter advances, Esc cancels.
+;; Memory: 0x00 iov/nwritten; 0x100 width output; 0x1000 immutable strings.
 (module
-  (import "wasi_snapshot_preview1" "fd_write"
-    (func $write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
   (import "term" "available" (func $available (result i32)))
   (import "term" "enter" (func $enter (result i32)))
-  (import "term" "exit" (func $term_exit (result i32)))
+  (import "term" "exit" (func $leave (result i32)))
   (import "term" "clear" (func $clear (result i32)))
+  (import "term" "move_to" (func $move (param i32 i32) (result i32)))
+  (import "term" "size" (func $size (result i32)))
   (import "term" "read_key" (func $key (result i32)))
-  (memory 1)
-  (export "memory" (memory 0))
+  ;; text_width(ptr, len, out_ptr) -> 0; bridge writes u32 at out_ptr.
+  (import "bridge" "text_width" (func $width (param i32 i32 i32) (result i32)))
+  ;; The bridge copies through harness-owned app memory.
+  (import "env" "memory" (memory 2)) (export "memory" (memory 0))
 
-  (func $print (param $p i32) (param $n i32)
-    (i32.store (i32.const 0) (local.get $p))
-    (i32.store (i32.const 4) (local.get $n))
-    (call $write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8))
-    (drop))
+  (func $p (param $ptr i32) (param $len i32)
+    (i32.store (i32.const 0) (local.get $ptr))
+    (i32.store (i32.const 4) (local.get $len))
+    (call $write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)) (drop))
+  (func $at (param $x i32) (param $y i32) (param $ptr i32) (param $len i32)
+    (call $move (local.get $x) (local.get $y)) (drop)
+    (call $p (local.get $ptr) (local.get $len)))
+  (func $opt (param $x i32) (param $y i32) (param $selected i32) (param $checked i32)
+    (param $label i32) (param $len i32)
+    (local $prefix i32) (local $plen i32)
+    (local.set $prefix (i32.const 0x1400)) (local.set $plen (i32.const 4))
+    (local.get $checked) (if (then (local.set $prefix (i32.const 0x1410)) (local.set $plen (i32.const 9))))
+    (local.get $selected) (if (then
+      (local.get $checked)
+      (if (then (local.set $prefix (i32.const 0x1420)) (local.set $plen (i32.const 13)))
+          (else (local.set $prefix (i32.const 0x1430)) (local.set $plen (i32.const 9))))))
+    (call $at (local.get $x) (local.get $y) (local.get $prefix) (local.get $plen))
+    (call $p (local.get $label) (local.get $len))
+    (call $p (i32.const 0x1440) (i32.const 4)))
 
-  (func $draw (param $choice i32)
+  ;; phase: 0 environment, 1 features, 2 confirm. cursor always 0..2 except
+  ;; confirm (0..1). mask is the three feature bits.
+  (func $draw (param $phase i32) (param $cur i32) (param $mask i32)
+    (param $x i32) (param $y i32) (param $title_x i32)
     (call $clear) (drop)
-    (call $print (i32.const 0x1000) (i32.const 58))
-    (local.get $choice) (i32.const 0) (i32.eq)
-    (if (then (call $print (i32.const 0x103d) (i32.const 19)))
-        (else (call $print (i32.const 0x1050) (i32.const 19))))
-    (local.get $choice) (i32.const 1) (i32.eq)
-    (if (then (call $print (i32.const 0x1063) (i32.const 19)))
-        (else (call $print (i32.const 0x1076) (i32.const 19))))
-    (local.get $choice) (i32.const 2) (i32.eq)
-    (if (then (call $print (i32.const 0x1089) (i32.const 19)))
-        (else (call $print (i32.const 0x109c) (i32.const 19)))))
+    (call $at (local.get $title_x) (local.get $y) (i32.const 0x1000) (i32.const 28))
+    (call $at (local.get $x) (i32.add (local.get $y) (i32.const 2)) (i32.const 0x1030) (i32.const 53))
+    (local.get $phase) (i32.const 0) (i32.eq)
+    (if (then
+      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4)) (i32.const 0x1070) (i32.const 29))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6)) (i32.eq (local.get $cur) (i32.const 0)) (i32.const 0) (i32.const 0x1200) (i32.const 3))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7)) (i32.eq (local.get $cur) (i32.const 1)) (i32.const 0) (i32.const 0x1203) (i32.const 7))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 8)) (i32.eq (local.get $cur) (i32.const 2)) (i32.const 0) (i32.const 0x120a) (i32.const 4))))
+    (local.get $phase) (i32.const 1) (i32.eq)
+    (if (then
+      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4)) (i32.const 0x10a0) (i32.const 35))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6)) (i32.eq (local.get $cur) (i32.const 0)) (i32.and (local.get $mask) (i32.const 1)) (i32.const 0x1210) (i32.const 7))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7)) (i32.eq (local.get $cur) (i32.const 1)) (i32.and (local.get $mask) (i32.const 2)) (i32.const 0x1217) (i32.const 3))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 8)) (i32.eq (local.get $cur) (i32.const 2)) (i32.and (local.get $mask) (i32.const 4)) (i32.const 0x121a) (i32.const 7))
+      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 11)) (i32.const 0x10d0) (i32.const 35))))
+    (local.get $phase) (i32.const 2) (i32.eq)
+    (if (then
+      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4)) (i32.const 0x1110) (i32.const 28))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6)) (i32.eq (local.get $cur) (i32.const 0)) (i32.const 0) (i32.const 0x1221) (i32.const 14))
+      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7)) (i32.eq (local.get $cur) (i32.const 1)) (i32.const 0) (i32.const 0x1230) (i32.const 16)))))
+
+  (func $cancel
+    (call $leave) (drop) (call $p (i32.const 0x1320) (i32.const 11))
+    (call $exit (i32.const 1)) (unreachable))
+  (func $done (param $env i32) (param $mask i32)
+    (call $leave) (drop) (call $p (i32.const 0x1300) (i32.const 30))
+    (local.get $env) (i32.const 0) (i32.eq) (if (then (call $p (i32.const 0x1200) (i32.const 3))))
+    (local.get $env) (i32.const 1) (i32.eq) (if (then (call $p (i32.const 0x1203) (i32.const 7))))
+    (local.get $env) (i32.const 2) (i32.eq) (if (then (call $p (i32.const 0x120a) (i32.const 4))))
+    (call $p (i32.const 0x1340) (i32.const 12))
+    (local.get $mask) (i32.const 1) (i32.and) (if (then (call $p (i32.const 0x1210) (i32.const 7)) (call $p (i32.const 0x1350) (i32.const 2))))
+    (local.get $mask) (i32.const 2) (i32.and) (if (then (call $p (i32.const 0x1217) (i32.const 3)) (call $p (i32.const 0x1350) (i32.const 2))))
+    (local.get $mask) (i32.const 4) (i32.and) (if (then (call $p (i32.const 0x121a) (i32.const 7))))
+    (call $p (i32.const 0x1360) (i32.const 1)) (call $exit (i32.const 0)) (unreachable))
 
   (func (export "_start")
-    (local $choice i32) (local $key i32)
-    (call $available) (i32.eqz)
-    (if (then
-      (call $print (i32.const 0x10af) (i32.const 62))
-      (call $exit (i32.const 2))
-      (unreachable)))
-    (call $enter) (i32.const 0) (i32.ne)
-    (if (then (call $exit (i32.const 2)) (unreachable)))
-    (local.set $choice (i32.const 0))
-    (block $done
-      (loop $input
-        (call $draw (local.get $choice))
-        (local.set $key (call $key))
-        (local.get $key) (i32.const 0x102) (i32.eq) ;; down
-        (if (then
-          (local.set $choice (i32.rem_u
-            (i32.add (local.get $choice) (i32.const 1)) (i32.const 3)))
-          (br $input)))
-        (local.get $key) (i32.const 0x101) (i32.eq) ;; up
-        (if (then
-          (local.set $choice (i32.rem_u
-            (i32.add (local.get $choice) (i32.const 2)) (i32.const 3)))
-          (br $input)))
-        (local.get $key) (i32.const 0x10d) (i32.eq) ;; enter
-        (br_if $done)
-        (local.get $key) (i32.const 0x11b) (i32.eq) ;; escape
-        (local.get $key) (i32.const 3) (i32.eq)     ;; ctrl-c
-        (i32.or)
-        (if (then
-          (call $term_exit) (drop)
-          (call $print (i32.const 0x10ed) (i32.const 11))
-          (call $exit (i32.const 1))
-          (unreachable)))
-        (br $input)))
-    (call $term_exit) (drop)
-    (call $print (i32.const 0x10f8) (i32.const 10))
-    (local.get $choice) (i32.const 0) (i32.eq)
-    (if (then (call $print (i32.const 0x1102) (i32.const 3))))
-    (local.get $choice) (i32.const 1) (i32.eq)
-    (if (then (call $print (i32.const 0x1105) (i32.const 7))))
-    (local.get $choice) (i32.const 2) (i32.eq)
-    (if (then (call $print (i32.const 0x110c) (i32.const 4))))
-    (call $print (i32.const 0x1110) (i32.const 1))
-    (call $exit (i32.const 0))
-    (unreachable))
+    (local $packed i32) (local $cols i32) (local $rows i32) (local $x i32) (local $y i32) (local $tx i32)
+    (local $phase i32) (local $cur i32) (local $mask i32) (local $env i32) (local $k i32)
+    (call $available) (i32.eqz) (if (then (call $p (i32.const 0x1380) (i32.const 62)) (call $exit (i32.const 2)) (unreachable)))
+    (call $enter) (i32.const 0) (i32.ne) (if (then (call $exit (i32.const 2)) (unreachable)))
+    (local.set $packed (call $size))
+    (local.set $cols (i32.shr_u (local.get $packed) (i32.const 16)))
+    (local.set $rows (i32.and (local.get $packed) (i32.const 65535)))
+    (i32.or (i32.lt_u (local.get $cols) (i32.const 46)) (i32.lt_u (local.get $rows) (i32.const 14)))
+    (if (then (call $clear) (drop) (call $at (i32.const 0) (i32.const 0) (i32.const 0x13d0) (i32.const 47)) (call $leave) (drop) (call $exit (i32.const 2)) (unreachable)))
+    ;; Rust bridge writes actual Unicode cell width of the cyan title at 0x100.
+    (call $width (i32.const 0x1000) (i32.const 28) (i32.const 0x100)) (i32.const 0) (i32.ne)
+    (if (then (call $leave) (drop) (call $exit (i32.const 2)) (unreachable)))
+    (local.set $x (i32.shr_u (i32.sub (local.get $cols) (i32.const 40)) (i32.const 1)))
+    (local.set $y (i32.shr_u (i32.sub (local.get $rows) (i32.const 14)) (i32.const 1)))
+    (local.set $tx (i32.shr_u (i32.sub (local.get $cols) (i32.load (i32.const 0x100))) (i32.const 1)))
+    (local.set $phase (i32.const 0)) (local.set $cur (i32.const 0)) (local.set $mask (i32.const 0))
+    (loop $input
+      (call $draw (local.get $phase) (local.get $cur) (local.get $mask) (local.get $x) (local.get $y) (local.get $tx))
+      (local.set $k (call $key))
+      (i32.or (i32.eq (local.get $k) (i32.const 0x11b)) (i32.eq (local.get $k) (i32.const 3))) (if (then (call $cancel)))
+      (i32.eq (local.get $k) (i32.const 0x102)) (if (then (local.set $cur (i32.rem_u (i32.add (local.get $cur) (i32.const 1)) (if (result i32) (i32.eq (local.get $phase) (i32.const 2)) (then (i32.const 2)) (else (i32.const 3))))) (br $input)))
+      (i32.eq (local.get $k) (i32.const 0x101)) (if (then (local.set $cur (i32.rem_u (i32.add (local.get $cur) (if (result i32) (i32.eq (local.get $phase) (i32.const 2)) (then (i32.const 1)) (else (i32.const 2)))) (if (result i32) (i32.eq (local.get $phase) (i32.const 2)) (then (i32.const 2)) (else (i32.const 3))))) (br $input)))
+      (i32.and (i32.eq (local.get $phase) (i32.const 1)) (i32.eq (local.get $k) (i32.const 32))) (if (then (local.set $mask (i32.xor (local.get $mask) (i32.shl (i32.const 1) (local.get $cur)))) (br $input)))
+      (i32.eq (local.get $k) (i32.const 0x10d)) (if (then
+        (local.get $phase) (i32.const 0) (i32.eq) (if (then (local.set $env (local.get $cur)) (local.set $phase (i32.const 1)) (local.set $cur (i32.const 0)) (br $input)))
+        (local.get $phase) (i32.const 1) (i32.eq) (if (then (local.get $mask) (i32.eqz) (if (then (br $input))) (local.set $phase (i32.const 2)) (local.set $cur (i32.const 0)) (br $input)))
+        (local.get $cur) (i32.eqz) (if (then (call $done (local.get $env) (local.get $mask)))) (call $cancel)))
+      (br $input)) (unreachable))
 
-  (data (i32.const 0x1000) "prompts raw demo\n\nChoose an environment (arrows, Enter):\n\n")
-  (data (i32.const 0x103d) "> dev             \n")
-  (data (i32.const 0x1050) "  dev             \n")
-  (data (i32.const 0x1063) "> staging         \n")
-  (data (i32.const 0x1076) "  staging         \n")
-  (data (i32.const 0x1089) "> prod            \n")
-  (data (i32.const 0x109c) "  prod            \n")
-  (data (i32.const 0x10af) "interactive terminal required; use examples/prompts for pipes\n")
-  (data (i32.const 0x10ed) "Cancelled.\n")
-  (data (i32.const 0x10f8) "Selected: ")
-  (data (i32.const 0x1102) "dev")
-  (data (i32.const 0x1105) "staging")
-  (data (i32.const 0x110c) "prod")
-  (data (i32.const 0x1110) "\n")
+  ;; Non-overlapping data. Lengths are UTF-8 byte counts (ANSI included).
+  (data (i32.const 0x1000) "\1b[1;36m◆ Project setup\1b[0m")
+  (data (i32.const 0x1030) "\1b[2mArrows move · Space toggles · Enter selects\1b[0m")
+  (data (i32.const 0x1070) "\1b[1mChoose an environment\1b[0m")
+  (data (i32.const 0x10a0) "\1b[1mSelect one or more features\1b[0m")
+  (data (i32.const 0x10d0) "\1b[2mSelect at least one feature\1b[0m")
+  (data (i32.const 0x1110) "\1b[1mCreate this project?\1b[0m")
+  (data (i32.const 0x1200) "dev") (data (i32.const 0x1203) "staging") (data (i32.const 0x120a) "prod")
+  (data (i32.const 0x1210) "workers") (data (i32.const 0x1217) "tls") (data (i32.const 0x121a) "metrics")
+  (data (i32.const 0x1221) "Yes, create it") (data (i32.const 0x1230) "No, cancel setup")
+  (data (i32.const 0x1300) "◆ Created configuration for ") (data (i32.const 0x1320) "Cancelled.\n")
+  (data (i32.const 0x1340) " | features ") (data (i32.const 0x1350) ", ") (data (i32.const 0x1360) "\n")
+  (data (i32.const 0x1380) "interactive terminal required; use examples/prompts for pipes\n")
+  (data (i32.const 0x13d0) "terminal must be at least 46 columns x 14 rows\n")
+  (data (i32.const 0x1400) "    ") (data (i32.const 0x1410) "\1b[32m[x] ")
+  (data (i32.const 0x1420) "\1b[1;36m> [x] ") (data (i32.const 0x1430) "\1b[1;36m> ") (data (i32.const 0x1440) "\1b[0m")
 )

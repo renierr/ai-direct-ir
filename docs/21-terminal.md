@@ -47,7 +47,10 @@ host-rs check examples/prompts-raw/prompts-raw.toml
 host-rs examples/prompts-raw/prompts-raw.toml
 ```
 
-Use Up/Down, Enter, Escape, or Ctrl-C. The focused example proves raw key
-selection; `examples/prompts/` remains the full line-based, pipeable setup
-flow. Build richer prompt widgets from these primitives only when they are an
-actual app need, rather than adding a bespoke host function per widget.
+Use Up/Down, Space, Enter, Escape, or Ctrl-C. `examples/prompts-raw/` provides
+a responsive environment select, feature checkbox multiselect, confirmation,
+cancellation, and summary. It uses the `libs/text-width/` Rust bridge for
+Unicode display-cell width, so its title is centered correctly despite ANSI
+escapes and Unicode byte counts. `examples/prompts/` remains the line-based,
+pipeable setup flow. Build richer widgets from these primitives only when they
+are an actual app need, rather than adding a bespoke host function per widget.

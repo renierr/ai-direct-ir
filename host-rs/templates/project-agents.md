@@ -45,4 +45,8 @@ host-rs inspect __APPNAME__.wasm # what it needs and offers
   and see the harness `docs/21-terminal.md` for raw mode, key events,
   alternate screen, cursor, and size. The harness restores the terminal
   after guest errors/traps.
+- Text layout: UTF-8 byte length is not terminal display width (especially
+  with ANSI escapes and Unicode). For centered/aligned terminal text, use a
+  compatible width library through a bridge; the harness example is
+  `libs/text-width/` (`unicode-width`) with `examples/prompts-raw/`.
 - Commit messages: short imperative summary.

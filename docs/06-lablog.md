@@ -2,6 +2,19 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Responsive raw prompts: WAT state plus Cargo unicode-width bridge
+- Added `libs/text-width/`: Rust `cdylib` using crates.io `unicode-width 0.2`.
+  It exposes `text_width_alloc` and `text_width_utf8(ptr,len,out_u32)->rc`.
+  The bridge copies styled UTF-8 into the lib, strips ANSI CSI for measuring,
+  and copies the cell-width u32 back. WAT uses it to center the title.
+- Replaced the fixed-coordinate raw prototype: terminal dimensions calculate
+  the card origin; cyan/green/dim ANSI styles; environment select, feature
+  checkbox multiselect, confirmation, cancel, normal-shell summary. Requires
+  >=46x14 and non-TTY exits 2 with a pipe fallback.
+- Proof: Cargo WASI build, `wat2wasm`, `host-rs check`, then a 100x30
+  pseudo-TTY sequence selected staging + workers + tls with zero NULs or
+  truncation and restored cursor/alternate screen. No commit.
+
 ## 2026-09-04 — Terminal capability: raw mode, alternate screen, key events
 - User-approved `crossterm 0.28.1` added to host-rs. `term.*`: availability,
   raw/alternate enter/exit, clear, cursor move, packed size, flush, decoded

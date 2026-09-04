@@ -40,9 +40,12 @@ printf 'demo\n2\n1,3\ny\n' | host-rs examples/prompts/prompts.toml
 
 Full terminal UI is now available through the narrow `term.*` ABI
 (`docs/21-terminal.md`): raw-mode enter/restore, alternate screen, cursor,
-size, and key events. The `examples/prompts-raw/` selection proof imports it;
-the ordinary prompt example retains its pipeable line interface. Do not compile
-a whole JS runtime just to reuse Clack.
+size, and key events. `examples/prompts-raw/` provides responsive select,
+checkbox multiselect, confirmation, cancellation, and summary; the ordinary
+prompt example retains its pipeable line interface. Its WAT state machine uses
+the Cargo `unicode-width` bridge to center styled Unicode text by display cells
+rather than UTF-8 byte count. Do not compile a whole JS runtime just to reuse
+Clack.
 
 ## Scaffold a new app
 
