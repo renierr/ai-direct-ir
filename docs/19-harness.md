@@ -74,9 +74,11 @@ per-OS (25 MB release); the `.wasm` files are portable.
 
 ## Distribution
 
-Run `host-rs build`, `host-rs check`, then `host-rs dist` from a project
-directory. `dist` is removed and recreated on each invocation and is ignored
-by the scaffold's `.gitignore`.
+Run `host-rs dist` from a project directory. When `[app].source` is declared,
+it builds the WAT source and validates the result before packaging; prebuilt
+WASM manifests are validated as supplied. During development, run `host-rs
+build` and `host-rs check` separately for faster feedback. `dist` is removed
+and recreated on each invocation and is ignored by the scaffold's `.gitignore`.
 
 Native distributions contain `host-rs`, a local rewritten `host.toml`, the app
 WASM, all declared library and bridge WASM files, and the configured `root`

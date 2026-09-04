@@ -233,6 +233,13 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         );
     }
     let manifest = crate::manifest::load(path)?;
+    // A release starts from source when the manifest declares it. Prebuilt
+    // modules remain valid: they have no source and are checked as supplied.
+    if manifest.app.source.is_some() {
+        cmd_build(path)?;
+    }
+    let engine = Engine::default();
+    cmd_check(&engine, path, &manifest)?;
     let base = std::fs::canonicalize(manifest_base(path))?;
     let dist = base.join("dist");
     if dist.exists() {

@@ -29,6 +29,9 @@ __RUN_COMMAND__
 host-rs dist
 ```
 
+`dist` builds declared WAT source and checks the result before packaging. Run
+`build` and `check` separately during development for faster feedback.
+
 __TARGET_AGENT_CONTRACT__
 
 ## Scope

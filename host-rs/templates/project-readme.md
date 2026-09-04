@@ -20,8 +20,9 @@ host-rs dist
 
 `build` writes the `[app].path` artifact from `[app].source`. `check` validates
 the compiled module without running it. Run both after every WAT or manifest
-change. `dist` replaces the ignored `dist/` directory with a self-contained
-bundle ready to ship.
+change. `dist` runs that build/check preflight when WAT source is declared,
+then replaces the ignored `dist/` directory with a self-contained bundle ready
+to ship.
 
 __TARGET_WORKFLOW__
 
