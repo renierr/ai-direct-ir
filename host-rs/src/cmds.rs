@@ -24,14 +24,14 @@ pub fn print_help() {
             SetAttribute(Attribute::Reset),
             ResetColor,
             Print(format!(
-                " {} -- build, validate, and run native or browser WASM projects\n",
+                " {} -- build, validate, and run native, browser, or GUI WASM projects\n",
                 env!("CARGO_PKG_VERSION")
             )),
         );
     } else {
         let _ = writeln!(
             out,
-            "host-rs {} -- build, validate, and run native or browser WASM projects",
+            "host-rs {} -- build, validate, and run native, browser, or GUI WASM projects",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -52,7 +52,7 @@ pub fn print_help() {
         ),
         (
             "run [manifest.toml]",
-            "link and execute a native app; defaults to host.toml",
+            "link and execute a native or GUI app; defaults to host.toml",
         ),
         (
             "serve [manifest.toml]",
@@ -73,7 +73,7 @@ pub fn print_help() {
         ),
         (
             "new <name>",
-            "choose native or browser, then scaffold a project",
+            "choose native, browser, or GUI, then scaffold a project",
         ),
         ("help, -h, --help", "this text"),
         ("version, -V, --version", "version"),
@@ -82,11 +82,11 @@ pub fn print_help() {
     }
     help_section(&mut out, color, "EXAMPLES");
     for (command, description) in [
-        ("host-rs new myapp", "choose native or browser"),
+        ("host-rs new myapp", "choose native, browser, or GUI"),
         ("cd myapp && host-rs build", ""),
         ("host-rs check", "validate host.toml and the compiled app"),
         ("host-rs dist", "create a shippable dist/ bundle"),
-        ("host-rs run", "native project"),
+        ("host-rs run", "native or GUI project"),
         ("host-rs serve", "browser project"),
         (
             "host-rs inspect external-lib.wasm",
@@ -156,6 +156,9 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
         return fail(format!(
             "{path} targets a browser; build it, then serve its directory and open index.html"
         ));
+    }
+    if manifest.target == Target::Gui {
+        return crate::gui::run(engine.clone(), manifest, manifest_base(path));
     }
     let base = manifest_base(path);
     if manifest.worker_count() > 1 {
@@ -255,6 +258,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             match manifest.target {
                 Target::Native => "native",
                 Target::Browser => "browser",
+                Target::Gui => "gui",
             }
             .into(),
         ),
@@ -304,7 +308,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             manifest_out.insert("guest".into(), toml::Value::String(guest.clone()));
         }
     }
-    if manifest.target == Target::Native {
+    if matches!(manifest.target, Target::Native | Target::Gui) {
         let mut libs = Vec::new();
         for lib in &manifest.libs {
             let path = copy_bundle_file(&base, &dist, &lib.path)?;
@@ -373,10 +377,10 @@ pub fn cmd_dist(path: &str) -> Result<()> {
     )?;
     println!(
         "created {} distribution at {}",
-        if manifest.target == Target::Native {
-            "native"
-        } else {
-            "browser"
+        match manifest.target {
+            Target::Native => "native",
+            Target::Browser => "browser",
+            Target::Gui => "GUI",
         },
         dist.display()
     );
@@ -556,6 +560,9 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
     if manifest.target == Target::Browser {
         return check_browser(engine, manifest_path, manifest, &base);
     }
+    if manifest.target == Target::Gui {
+        return check_gui(engine, manifest_path, manifest, &base);
+    }
     let linked = link_all(engine, manifest, &base)?;
     let app_mod =
         wasmtime::Module::from_file(engine, crate::link::join(&base, &manifest.app.path))?;
@@ -601,6 +608,70 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
     }
     println!("check {manifest_path}: all modules linked, all imports satisfied");
     Ok(())
+}
+
+fn check_gui(
+    engine: &Engine,
+    manifest_path: &str,
+    manifest: &Manifest,
+    base: &std::path::Path,
+) -> Result<()> {
+    if !matches!(manifest.mode, crate::manifest::Mode::Command) {
+        return fail("GUI projects require mode = \"command\"".into());
+    }
+    if !manifest.bridges.is_empty() {
+        return fail("GUI projects do not support [[bridges]] yet".into());
+    }
+    let app = wasmtime::Module::from_file(engine, crate::link::join(base, &manifest.app.path))?;
+    for import in app.imports() {
+        let allowed = (import.module() == "env" && import.name() == "memory")
+            || (import.module() == "ui" && gui_import_sig_ok(import.name(), &import.ty()))
+            || manifest
+                .libs
+                .iter()
+                .any(|lib| lib.namespace == import.module());
+        if !allowed {
+            return fail(format!(
+                "GUI app import {}.{} is unsupported; GUI projects may import env.memory, ui.*, and declared libraries",
+                import.module(),
+                import.name()
+            ));
+        }
+    }
+    for lib in &manifest.libs {
+        let module = wasmtime::Module::from_file(engine, crate::link::join(base, &lib.path))?;
+        for import in module.imports() {
+            let allowed = (import.module() == "env" && import.name() == "memory")
+                || (import.module() == "ui" && gui_import_sig_ok(import.name(), &import.ty()));
+            if !allowed {
+                return fail(format!(
+                    "GUI library {} imports unsupported {}.{}; libraries may import only env.memory and ui.*",
+                    lib.path,
+                    import.module(),
+                    import.name()
+                ));
+            }
+        }
+    }
+    // Instantiation proves declared library exports satisfy the app imports.
+    link_all(engine, manifest, base)?;
+    match app.exports().find(|e| e.name() == manifest.app.run) {
+        Some(e) if browser_func_sig_ok(&e.ty(), 0, 0) => {}
+        _ => {
+            return fail(format!(
+                "GUI app needs zero-argument export `{}`",
+                manifest.app.run
+            ));
+        }
+    }
+    println!("run `{}`: signature ok", manifest.app.run);
+    println!("check {manifest_path}: GUI imports are provided by the egui host");
+    Ok(())
+}
+
+fn gui_import_sig_ok(name: &str, ty: &ExternType) -> bool {
+    matches!(name, "label" | "button")
+        && browser_func_sig_ok(ty, 2, if name == "button" { 1 } else { 0 })
 }
 
 /// Browser modules are checked against the browser host ABI, not linked in
@@ -802,11 +873,12 @@ pub fn cmd_new(name: &str) -> Result<()> {
         }
     }
     let hello = format!("hello from {name}\n");
-    let (starter, manifest) = if target == Target::Browser {
-        browser_starter(name)
-    } else {
-        let starter = format!(
-            ";; {name}.wat — {name} app, hosted by host-rs.\n\
+    let (starter, manifest) = match target {
+        Target::Browser => browser_starter(name),
+        Target::Gui => gui_starter(name),
+        Target::Native => {
+            let starter = format!(
+                ";; {name}.wat — {name} app, hosted by host-rs.\n\
          ;; Build: host-rs build\n\
          ;; Check: host-rs check\n\
          ;; Run:   host-rs run\n\
@@ -835,14 +907,14 @@ pub fn cmd_new(name: &str) -> Result<()> {
          \n\
          \x20 (data (i32.const 0x1000) \"{hello}\")\n\
          )\n",
-            name = name,
-            // WAT string syntax needs an escaped newline, not a literal one;
-            // otherwise the byte count includes a byte absent from the data.
-            hello = hello.escape_default(),
-            hlen = hello.len()
-        );
-        let manifest = format!(
-            "# {name}: command-mode app. Build, check, then run:\n\
+                name = name,
+                // WAT string syntax needs an escaped newline, not a literal one;
+                // otherwise the byte count includes a byte absent from the data.
+                hello = hello.escape_default(),
+                hlen = hello.len()
+            );
+            let manifest = format!(
+                "# {name}: command-mode app. Build, check, then run:\n\
          #   host-rs build && host-rs check && host-rs run\n\
          mode = \"command\"\n\
          \n\
@@ -850,8 +922,9 @@ pub fn cmd_new(name: &str) -> Result<()> {
          source = \"{name}.wat\"\n\
          path = \"{name}.wasm\"\n\
          run = \"_start\"\n"
-        );
-        (starter, manifest)
+            );
+            (starter, manifest)
+        }
     };
     std::fs::write(&wat, starter)?;
     std::fs::write(&toml, manifest)?;
@@ -911,6 +984,18 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
             "Use `host-rs serve` and test the result in a browser",
             "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `net.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
         )
+    } else if *target == Target::Gui {
+        (
+            "native GUI",
+            "host-rs run",
+            "`host-rs run` opens the native egui window and calls the configured entry once per UI frame. `host-rs dist` contains the executable, manifest, and compiled application.",
+            "",
+            "The module imports `env.memory` plus documented `ui.*` functions and exports a zero-argument frame function. WAT owns state; the host renders controls using egui. Read `docs/22-abi.md` before changing imports.",
+            "Run `host-rs run`, interact with the window, and confirm expected state changes",
+            "- GUI v1 permits only `env.memory`, `ui.label(ptr, len)`, and `ui.button(ptr, len) -> i32`.
+- The entry runs once per UI frame. Button clicks are returned on the following frame; retain application state in WAT globals or memory.
+- Do not import WASI, `term.*`, `net.*`, `web.*`, `[[libs]]`, or `[[bridges]]`.",
+        )
     } else {
         (
             "native",
@@ -938,15 +1023,16 @@ fn prompt_target() -> Result<Target> {
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         return select_target();
     }
-    print!("target [native/browser] (native): ");
+    print!("target [native/browser/gui] (native): ");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     match input.trim() {
         "" | "native" => Ok(Target::Native),
         "browser" => Ok(Target::Browser),
+        "gui" => Ok(Target::Gui),
         other => fail(format!(
-            "unknown target `{other}`: choose native or browser"
+            "unknown target `{other}`: choose native, browser, or gui"
         )),
     }
 }
@@ -980,6 +1066,7 @@ fn select_target() -> Result<Target> {
         for (index, (name, description)) in [
             ("Native", "WASI, terminal, server, and WASM libraries"),
             ("Browser", "Canvas application served to a web browser"),
+            ("GUI", "Native egui desktop application"),
         ]
         .iter()
         .enumerate()
@@ -1013,14 +1100,16 @@ fn select_target() -> Result<Target> {
                 selected = selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                selected = (selected + 1).min(1);
+                selected = (selected + 1).min(2);
             }
             KeyCode::Enter => {
                 println!();
                 return Ok(if selected == 0 {
                     Target::Native
-                } else {
+                } else if selected == 1 {
                     Target::Browser
+                } else {
+                    Target::Gui
                 });
             }
             KeyCode::Esc => {
@@ -1034,7 +1123,7 @@ fn select_target() -> Result<Target> {
             _ => continue,
         }
         let mut out = io::stdout();
-        execute!(out, MoveUp(4))
+        execute!(out, MoveUp(5))
             .map_err(|e| wasmtime::Error::msg(format!("terminal redraw: {e}")))?;
         draw(selected).map_err(|e| wasmtime::Error::msg(format!("terminal draw: {e}")))?;
     }
@@ -1066,6 +1155,40 @@ fn browser_starter(name: &str) -> (String, String) {
          source = \"{name}.wat\"\n\
          path = \"{name}.wasm\"\n\
          run = \"start\"\n"
+    );
+    (starter, manifest)
+}
+
+fn gui_starter(name: &str) -> (String, String) {
+    let hello = format!("Hello from {name}");
+    let starter = format!(
+        ";; {name}.wat -- native egui app hosted by host-rs.\n\
+         ;; The entry runs every UI frame. Strings are UTF-8 in env.memory.\n\
+         (module\n\
+         \x20 (import \"env\" \"memory\" (memory 1))\n\
+         \x20 (import \"ui\" \"label\" (func $label (param i32 i32)))\n\
+         \x20 (import \"ui\" \"button\" (func $button (param i32 i32) (result i32)))\n\
+         \x20 (global $count (mut i32) (i32.const 0))\n\
+         \x20 (func (export \"frame\")\n\
+         \x20   (call $label (i32.const 0) (i32.const {}))\n\
+         \x20   (if (call $button (i32.const 32) (i32.const 9))\n\
+         \x20     (then (global.set $count (i32.add (global.get $count) (i32.const 1)))))\n\
+         \x20   (call $label (i32.const 48) (i32.const 15)))\n\
+         \x20 (data (i32.const 0) \"Hello from {name}\")\n\
+         \x20 (data (i32.const 32) \"Increment\")\n\
+         \x20 (data (i32.const 48) \"Button is ready\")\n\
+         )\n",
+        hello.len()
+    );
+    let manifest = format!(
+        "# {name}: native egui GUI app.\n\
+         target = \"gui\"\n\
+         mode = \"command\"\n\
+         \n\
+         [app]\n\
+         source = \"{name}.wat\"\n\
+         path = \"{name}.wasm\"\n\
+         run = \"frame\"\n"
     );
     (starter, manifest)
 }

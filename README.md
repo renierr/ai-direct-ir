@@ -48,7 +48,7 @@ the target and its linker to be installed separately.
 - [x] Interactive WAT app (`examples/pi/pi.wat` — stdin prompt, 0..1000 validation, spigot pi, bit-exact vs Chudnovsky at N=100/1000)
 - [ ] AI-generated raw WASM binary + `wasm-opt`
 - [x] Native exes via wasm2c (`native/hello-native`, `native/pi-native` — no runtime, N=1000 byte-identical, see `docs/13-wasm2c-native.md`)
-- [x] Generic harness `host-rs` — TOML manifests link + host apps and libs without rebuilding (`docs/19-harness.md`); `run`/`check`/`inspect`/`init`
+- [x] Generic harness `host-rs` — TOML manifests link + host apps and libs without rebuilding (`docs/19-harness.md`); native, browser Canvas, and native egui GUI targets
 - [x] Static file server in IR + finished Rust lib (`sha2` via bridge, `POST /sha256` matches `sha256sum`; see `docs/17-static-server.md`, `docs/18-cargo-libs.md`)
 - [ ] WASI Component Model target
 
@@ -58,5 +58,8 @@ the target and its linker to be installed separately.
 - `examples/{hello,pi,server}/` — runnable apps (WAT + tracked `.wasm` + manifest)
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` — Rust crate wrapping crates.io `sha2`
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/` — findings + lablog
+
+The host capability contract, compatibility policy, and target-specific import
+tables live in `docs/22-abi.md`. Any new WAT import must be specified there.
 
 See `AGENTS.md` for build/run rules, `docs/04-roadmap.md` and `docs/05-decisions.md`.

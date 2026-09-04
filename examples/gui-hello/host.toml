@@ -1,0 +1,11 @@
+target = "gui"
+mode = "command"
+
+[[libs]]
+path = "counter.wasm"
+as = "counter"
+
+[app]
+source = "gui-hello.wat"
+path = "gui-hello.wasm"
+run = "frame"

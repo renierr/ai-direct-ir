@@ -1,6 +1,7 @@
 //! host-rs: link + host configured WASM apps. See docs/19-harness.md.
 
 mod cmds;
+mod gui;
 mod host;
 mod link;
 mod manifest;

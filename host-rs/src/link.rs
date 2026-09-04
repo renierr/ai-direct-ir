@@ -10,6 +10,7 @@ use wasmtime::{Caller, Engine, ExternType, Linker, Memory, MemoryType, Module, R
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
+use crate::gui;
 use crate::host::{Host, shared_mem};
 use crate::manifest::{Bridge, Lib, Manifest, Mode};
 use crate::net;
@@ -187,6 +188,8 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
     linker.func_wrap("term", "size", term::w_size)?;
     linker.func_wrap("term", "flush", term::w_flush)?;
     linker.func_wrap("term", "read_key", term::w_read_key)?;
+    linker.func_wrap("ui", "label", gui::abi::label)?;
+    linker.func_wrap("ui", "button", gui::abi::button)?;
 
     for lib in &manifest.libs {
         wire_lib(&mut linker, &mut store, engine, &join(base, &lib.path), lib)?;

@@ -21,6 +21,8 @@ pub struct Host {
     pub next: i32,
     pub shared: Option<Memory>,
     pub term_active: bool,
+    pub ui: Vec<UiCommand>,
+    pub ui_clicked: std::collections::HashSet<String>,
 }
 
 impl Host {
@@ -31,6 +33,8 @@ impl Host {
             next: 100,
             shared: None,
             term_active: false,
+            ui: Vec::new(),
+            ui_clicked: std::collections::HashSet::new(),
         }
     }
 
@@ -40,6 +44,11 @@ impl Host {
         self.socks.insert(h, s);
         h
     }
+}
+
+pub enum UiCommand {
+    Label(String),
+    Button(String),
 }
 
 impl Drop for Host {

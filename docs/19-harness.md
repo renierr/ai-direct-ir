@@ -2,7 +2,7 @@
 
 One CLI builds and validates every app in this repo. Native apps run through
 the bundled Wasmtime host; browser apps run through a generated JavaScript
-host. A new project = a TOML manifest + `.wasm` files. The harness is never
+host; GUI apps run through a native egui host. A new project = a TOML manifest + `.wasm` files. The harness is never
 rebuilt for a new app — exactly the "config, not code" property the user asked
 for.
 
@@ -51,7 +51,7 @@ host-rs dist
 ```
 
 `host-rs new name` asks which host to scaffold: `native` (the default) or
-`browser`. A browser project gets `index.html` and a baked-in `web-host.js`;
+`browser`, or `gui`. A browser project gets `index.html` and a baked-in `web-host.js`;
 after `build` and `check`, use `host-rs serve` to serve its directory on
 localhost with the required WASM MIME type. `host-rs run` only executes native
 apps. In a real terminal, choose with Up/Down (or `j`/`k`) and Enter; piped
@@ -70,7 +70,11 @@ WASM, Cargo and native build output, common JavaScript build directories, and
 `dist/`, which `host-rs dist` recreates as a release bundle.
 
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
-per-OS (25 MB release); the `.wasm` files are portable.
+per-OS (about 35 MB release with the native egui GUI target; about 25 MB before
+it); the `.wasm` files are portable. The executable embeds Rust, Wasmtime, and
+egui, but uses the target OS's normal graphics/window drivers. Linux releases
+therefore need a working Wayland or X11/OpenGL desktop stack; do not attempt to
+ship those system drivers as part of every application bundle.
 
 ## Distribution
 
@@ -95,7 +99,7 @@ the native harness for a browser app.
 ## Manifest reference
 
 ```toml
-target = "native"    # optional default; or "browser"
+target = "native"    # optional default; or "browser" or "gui"
 mode = "server"      # or "command"
 port = 8124          # server mode (default 8123)
 root = "www"            # optional preopen dir (WASI fd 3 when alone)

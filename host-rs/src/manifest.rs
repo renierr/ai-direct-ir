@@ -16,6 +16,7 @@ pub enum Mode {
 pub enum Target {
     Native,
     Browser,
+    Gui,
 }
 
 fn default_target() -> Target {
