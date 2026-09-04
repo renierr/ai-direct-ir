@@ -16,12 +16,8 @@ fn usage_err(what: &str, usage: &str) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let engine = Engine::default();
-    // A project carries one conventional manifest, so bare commands work
-    // from its directory without repeating a path.
+    // Commands are explicit; no arguments always show the available workflow.
     if args.is_empty() {
-        if std::path::Path::new("host.toml").is_file() {
-            return cmds::run_manifest(&engine, "host.toml");
-        }
         cmds::print_help();
         return Ok(());
     }
@@ -45,6 +41,10 @@ fn main() -> Result<()> {
             let path = if arg1.is_empty() { "host.toml" } else { arg1 };
             cmds::cmd_check(&engine, path, &manifest::load(path)?)
         }
+        "build" => {
+            let path = if arg1.is_empty() { "host.toml" } else { arg1 };
+            cmds::cmd_build(path)
+        }
         "init" => {
             if arg1.is_empty() {
                 return usage_err("missing app module", "host-rs init <app.wasm>");
@@ -57,9 +57,7 @@ fn main() -> Result<()> {
             }
             cmds::cmd_new(arg1)
         }
-        "run" => {
-            cmds::run_manifest(&engine, if arg1.is_empty() { "host.toml" } else { arg1 })
-        }
+        "run" => cmds::run_manifest(&engine, if arg1.is_empty() { "host.toml" } else { arg1 }),
         other => {
             // Shorthand: a .toml path means `run`.
             if other.ends_with(".toml") {

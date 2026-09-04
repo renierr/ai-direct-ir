@@ -10,7 +10,7 @@ use wasmtime::{Caller, Engine, ExternType, Linker, Memory, MemoryType, Module, R
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
-use crate::host::{shared_mem, Host};
+use crate::host::{Host, shared_mem};
 use crate::manifest::{Bridge, Lib, Manifest, Mode};
 use crate::net;
 use crate::term;
@@ -60,9 +60,9 @@ fn wire_lib(
     let names: Vec<String> = module.exports().map(|e| e.name().to_string()).collect();
     let inst = linker.instantiate(&mut *store, &module)?;
     for name in names {
-        let ext = inst.get_export(&mut *store, &name).ok_or_else(|| {
-            wasmtime::Error::msg(format!("{} lost export {name}", lib.path))
-        })?;
+        let ext = inst
+            .get_export(&mut *store, &name)
+            .ok_or_else(|| wasmtime::Error::msg(format!("{} lost export {name}", lib.path)))?;
         linker.define(&mut *store, &lib.namespace, &name, ext)?;
     }
     Ok(())
@@ -87,9 +87,8 @@ fn wire_bridge(
             wasmtime::Error::msg(format!("{} wants env.memory, none created", bridge.path))
         })?
     } else {
-        inst.get_memory(&mut *store, "memory").ok_or_else(|| {
-            wasmtime::Error::msg(format!("{} has no memory export", bridge.path))
-        })?
+        inst.get_memory(&mut *store, "memory")
+            .ok_or_else(|| wasmtime::Error::msg(format!("{} has no memory export", bridge.path)))?
     };
     let alloc = inst.get_typed_func::<i32, i32>(&mut *store, &bridge.alloc)?;
     for call in &bridge.calls {

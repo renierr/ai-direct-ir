@@ -17,6 +17,15 @@ echo 100 | host-rs examples/pi/pi.toml
 host-rs examples/hello/hello.toml
 ```
 
+For a scaffolded project, `host.toml` declares `[app].source` and `[app].path`.
+From its directory, build, validate, and run with:
+
+```bash
+host-rs build
+host-rs check
+host-rs run
+```
+
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
 per-OS (25 MB release); the `.wasm` files are portable.
 
@@ -51,6 +60,7 @@ out_len = 64
 max_in = 7000        # optional input cap (default 1 MiB)
 
 [app]
+source = "server.wat" # optional: WAT source for `host-rs build`
 path = "server.wasm"
 run = "run"          # server: run(port); command: run() e.g. _start
 ```

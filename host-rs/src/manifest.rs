@@ -44,6 +44,8 @@ pub struct Bridge {
 
 #[derive(Deserialize)]
 pub struct App {
+    /// Optional WAT source assembled by `host-rs build` into `path`.
+    pub source: Option<String>,
     pub path: String,
     pub run: String,
 }

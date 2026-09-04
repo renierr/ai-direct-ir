@@ -8,24 +8,25 @@ app. The app is written as readable WebAssembly Text (`.wat`); its compiled
 
 ## Quick Start
 
-Prerequisites: `host-rs` and `wat2wasm` must be on `PATH`.
+Prerequisites: `host-rs` and `wat2wasm` (from wabt) must be on `PATH`.
 
 ```bash
-wat2wasm __APPNAME__.wat -o __APPNAME__.wasm
+host-rs build
 host-rs check
-host-rs
+host-rs run
 ```
 
-`check` loads and links every configured module but does not execute it. Run
-it after every WAT or manifest change. Inside this directory, `host-rs` runs
-`host.toml` automatically. `host-rs run` and `host-rs check` use it too.
+`build` assembles the `[app].source` WAT file declared in `host.toml` into
+`[app].path`. Run it after every WAT change. `check` loads and links every
+configured module but does not execute it. `build`, `check`, and `run` use
+`host.toml` automatically when invoked inside this directory.
 
 ## Project Files
 
 | File | Purpose |
 |---|---|
 | `__APPNAME__.wat` | App source: AI-generated, human-reviewable WASM IR. |
-| `__APPNAME__.wasm` | Assembled app artifact. Rebuild it after changing WAT. |
+| `__APPNAME__.wasm` | Assembled app artifact. Rebuild with `host-rs build` after changing WAT. |
 | `host.toml` | Manifest: app mode, module paths, libraries, bridges, entry function. |
 | `AGENTS.md` | Rules and workflow for agents modifying this app. |
 

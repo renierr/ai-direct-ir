@@ -1,4 +1,4 @@
-//! Subcommands: run / check / inspect / init / help.
+//! Subcommands: build / run / check / inspect / init / help.
 
 use wasmtime::{Engine, ExternType, FuncType, Result, ValType};
 
@@ -12,10 +12,10 @@ pub fn print_help() {
         "host-rs {} — link + host configured WASM apps (see docs/19-harness.md)
 
 USAGE:
-  host-rs [command] [args]      run from a project directory or use paths
+  host-rs [command] [args]      use host.toml in a project directory or pass a path
 
 COMMANDS:
-  (no arguments)                run ./host.toml
+  build [manifest.toml]         assemble app.source into app.path; defaults to host.toml
   run [manifest.toml]           link modules and execute; defaults to host.toml
   <manifest.toml>               shorthand for `run`
   check [manifest.toml]         link everything, verify wiring; defaults to host.toml
@@ -33,7 +33,7 @@ COMMANDS:
 EXAMPLES:
   host-rs run examples/server/manifest.toml
   host-rs check examples/server/manifest.toml
-  cd myapp && host-rs
+  cd myapp && host-rs build && host-rs check && host-rs run
   host-rs inspect libs/sha256/sha256.wasm
   host-rs init myapp.wasm
   host-rs new myapp",
@@ -63,10 +63,9 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     }
     let mut linked = link_all(engine, &manifest, &base)?;
     if linked.is_server {
-        let run =
-            linked
-                .app_inst
-                .get_typed_func::<i32, i32>(&mut linked.store, &linked.run_name)?;
+        let run = linked
+            .app_inst
+            .get_typed_func::<i32, i32>(&mut linked.store, &linked.run_name)?;
         println!(
             "serving {:?} on 127.0.0.1:{} (Ctrl-C to stop)",
             manifest.root, linked.port
@@ -77,9 +76,7 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
         let func = linked
             .app_inst
             .get_func(&mut linked.store, &linked.run_name)
-            .ok_or_else(|| {
-                wasmtime::Error::msg(format!("app has no func {}", linked.run_name))
-            })?;
+            .ok_or_else(|| wasmtime::Error::msg(format!("app has no func {}", linked.run_name)))?;
         match func.call(&mut linked.store, &[], &mut []) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -91,6 +88,39 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
             }
         }
     }
+}
+
+/// Assemble a manifest-declared WAT source without running the app.
+pub fn cmd_build(path: &str) -> Result<()> {
+    let manifest = crate::manifest::load(path)?;
+    let source = manifest.app.source.ok_or_else(|| {
+        wasmtime::Error::msg(format!(
+            "{path} has no [app].source; app.path `{}` is prebuilt or has no declared WAT source",
+            manifest.app.path
+        ))
+    })?;
+    let base = manifest_base(path);
+    let source = crate::link::join(&base, &source);
+    let output = crate::link::join(&base, &manifest.app.path);
+    let status = std::process::Command::new("wat2wasm")
+        .arg(&source)
+        .arg("-o")
+        .arg(&output)
+        .status()
+        .map_err(|e| {
+            wasmtime::Error::msg(format!(
+                "could not run wat2wasm: {e}; install wabt or build `{}` manually",
+                source.display()
+            ))
+        })?;
+    if !status.success() {
+        return Err(wasmtime::Error::msg(format!(
+            "wat2wasm failed while building `{}`",
+            source.display()
+        )));
+    }
+    println!("built {} -> {}", source.display(), output.display());
+    Ok(())
 }
 
 fn func_sig(t: &FuncType) -> String {
@@ -142,7 +172,8 @@ pub fn cmd_inspect(engine: &Engine, path: &str) -> Result<()> {
 pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> Result<()> {
     let base = manifest_base(manifest_path);
     let linked = link_all(engine, manifest, &base)?;
-    let app_mod = wasmtime::Module::from_file(engine, crate::link::join(&base, &manifest.app.path))?;
+    let app_mod =
+        wasmtime::Module::from_file(engine, crate::link::join(&base, &manifest.app.path))?;
     let want_server = linked.is_server;
     let found = app_mod.exports().find(|e| e.name() == linked.run_name);
     match found {
@@ -234,17 +265,16 @@ fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()
                         return;
                     }
                 };
-                let handle =
-                    match linked
-                        .app_inst
-                        .get_typed_func::<i32, i32>(&mut linked.store, &func)
-                    {
-                        Ok(f) => f,
-                        Err(e) => {
-                            eprintln!("worker-{w}: entry `{func}`: {e}");
-                            return;
-                        }
-                    };
+                let handle = match linked
+                    .app_inst
+                    .get_typed_func::<i32, i32>(&mut linked.store, &func)
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("worker-{w}: entry `{func}`: {e}");
+                        return;
+                    }
+                };
                 for stream in rx {
                     let h = linked.store.data_mut().alloc_sock(Sock::Conn(stream));
                     if let Err(e) = handle.call(&mut linked.store, h) {
@@ -304,9 +334,9 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let hello = format!("hello from {name}\n");
     let starter = format!(
         ";; {name}.wat — {name} app, hosted by host-rs.\n\
-         ;; Build: wat2wasm {name}.wat -o {name}.wasm\n\
+         ;; Build: host-rs build\n\
          ;; Check: host-rs check\n\
-         ;; Run:   host-rs\n\
+         ;; Run:   host-rs run\n\
          ;;\n\
          ;; Command-mode contract: own memory (export it for WASI),\n\
          ;; WASI stdio, `_start` entry, `proc_exit` code is the exit code.\n\
@@ -339,12 +369,12 @@ pub fn cmd_new(name: &str) -> Result<()> {
         hlen = hello.len()
     );
     let manifest = format!(
-        "# {name}: command-mode app. Build the .wasm first:\n\
-         #   wat2wasm {name}.wat -o {name}.wasm\n\
-         # then: host-rs check && host-rs\n\
+        "# {name}: command-mode app. Build, check, then run:\n\
+         #   host-rs build && host-rs check && host-rs run\n\
          mode = \"command\"\n\
          \n\
          [app]\n\
+         source = \"{name}.wat\"\n\
          path = \"{name}.wasm\"\n\
          run = \"_start\"\n"
     );
@@ -360,7 +390,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
     )?;
     println!(
         "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n\
-         next:\n  cd {name} && wat2wasm {name}.wat -o {name}.wasm && host-rs check"
+         next:\n  cd {name} && host-rs build && host-rs check && host-rs run"
     );
     Ok(())
 }

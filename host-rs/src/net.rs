@@ -6,7 +6,7 @@ use std::net::TcpListener;
 
 use wasmtime::{Caller, Result};
 
-use crate::host::{shared_mem, Host, Sock};
+use crate::host::{Host, Sock, shared_mem};
 
 pub fn w_listen(mut caller: Caller<'_, Host>, port: i32) -> Result<i32> {
     let l = match TcpListener::bind(("127.0.0.1", port as u16)) {

@@ -8,7 +8,7 @@ links + runs configured WASM modules — see the harness repo,
 
 - **Never install, upgrade, or remove software without explicit user
   consent.** Missing tool? Stop and ask.
-- **Verify by execution.** Every claim ends in a run: `wat2wasm` must
+- **Verify by execution.** Every claim ends in a run: `host-rs build` must
   assemble, `host-rs check` must pass, CLI output must match.
 - **Keep the harness generic.** New app needs go in `host.toml`, never in
   harness code. If a genuinely new shape
@@ -27,9 +27,9 @@ links + runs configured WASM modules — see the harness repo,
 ## Build / run
 
 ```bash
-wat2wasm __APPNAME__.wat -o __APPNAME__.wasm
+host-rs build                    # assemble [app].source into [app].path
 host-rs check                    # link + verify host.toml, do NOT execute
-host-rs                          # run host.toml
+host-rs run                      # run host.toml
 host-rs inspect __APPNAME__.wasm # what it needs and offers
 ```
 

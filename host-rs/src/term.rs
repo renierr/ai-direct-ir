@@ -5,7 +5,7 @@
 //! deliberately separate from WASI: a batch command receives no terminal
 //! semantics unless it imports `term.*`.
 
-use std::io::{stdin, stdout, IsTerminal, Write};
+use std::io::{IsTerminal, Write, stdin, stdout};
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
@@ -92,7 +92,8 @@ pub fn w_read_key(caller: Caller<'_, Host>) -> Result<i32> {
         return Ok(-1);
     }
     loop {
-        let event = event::read().map_err(|e| wasmtime::Error::msg(format!("terminal read: {e}")))?;
+        let event =
+            event::read().map_err(|e| wasmtime::Error::msg(format!("terminal read: {e}")))?;
         let Event::Key(key) = event else { continue };
         if key.kind != KeyEventKind::Press {
             continue;
@@ -106,7 +107,9 @@ pub fn w_read_key(caller: Caller<'_, Host>) -> Result<i32> {
             KeyCode::Esc => KEY_ESCAPE,
             KeyCode::Backspace => KEY_BACKSPACE,
             KeyCode::Tab | KeyCode::BackTab => KEY_TAB,
-            KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => KEY_CTRL_C,
+            KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                KEY_CTRL_C
+            }
             KeyCode::Char(c) if c.is_ascii() => c as i32,
             _ => continue,
         };
