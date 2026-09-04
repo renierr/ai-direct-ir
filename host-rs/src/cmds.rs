@@ -24,14 +24,14 @@ pub fn print_help() {
             SetAttribute(Attribute::Reset),
             ResetColor,
             Print(format!(
-                " {} -- build, validate, and run native, browser, or GUI WASM projects\n",
+                " {} -- build, validate, and run native, browser, GUI, or component WASM projects\n",
                 env!("CARGO_PKG_VERSION")
             )),
         );
     } else {
         let _ = writeln!(
             out,
-            "host-rs {} -- build, validate, and run native, browser, or GUI WASM projects",
+            "host-rs {} -- build, validate, and run native, browser, GUI, or component WASM projects",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -52,7 +52,7 @@ pub fn print_help() {
         ),
         (
             "run [manifest.toml]",
-            "link and execute a native or GUI app; defaults to host.toml",
+            "link and execute a native, GUI, or component app; defaults to host.toml",
         ),
         (
             "serve [manifest.toml]",
@@ -73,7 +73,7 @@ pub fn print_help() {
         ),
         (
             "new <name>",
-            "choose native, browser, or GUI, then scaffold a project",
+            "choose native, browser, GUI, or component; scaffold a project",
         ),
         ("help, -h, --help", "this text"),
         ("version, -V, --version", "version"),
@@ -82,7 +82,10 @@ pub fn print_help() {
     }
     help_section(&mut out, color, "EXAMPLES");
     for (command, description) in [
-        ("host-rs new myapp", "choose native, browser, or GUI"),
+        (
+            "host-rs new myapp",
+            "choose native, browser, GUI, or component",
+        ),
         ("cd myapp && host-rs build", ""),
         ("host-rs check", "validate host.toml and the compiled app"),
         ("host-rs dist", "create a shippable dist/ bundle"),
@@ -160,6 +163,9 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
     }
     if manifest.target == Target::Gui {
         return crate::gui::run(engine.clone(), manifest, manifest_base(path));
+    }
+    if manifest.target == Target::Component {
+        return crate::component::run(engine, &manifest, &manifest_base(path));
     }
     let base = manifest_base(path);
     if manifest.worker_count() > 1 {
@@ -247,11 +253,20 @@ fn build_wat(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
     let expanded = expand_wat(&source)?;
     let wasm = wat::parse_str(&expanded.text)
         .map_err(|e| assemble_error(&source, &expanded, &e.to_string()))?;
-    // Validate before writing: `build` must never leave a module behind that
-    // `check`, `dist`, or a commit would later pick up as a good artifact.
-    // Compiling (not just validating) is what reports the offending function
-    // index, which is the only handle the include map can translate.
-    wasmtime::Module::new(engine, &wasm).map_err(|e| validate_error(&source, &expanded, &e))?;
+    // Validate before writing: `build` must never leave an artifact behind that
+    // `check`, `dist`, or a commit would later pick up as good. Compiling (not
+    // just validating) is what reports the offending function index, which is
+    // the only handle the include map can translate.
+    match manifest.target {
+        Target::Component => {
+            wasmtime::component::Component::new(engine, &wasm)
+                .map_err(|e| validate_error(&source, &expanded, &e))?;
+        }
+        _ => {
+            wasmtime::Module::new(engine, &wasm)
+                .map_err(|e| validate_error(&source, &expanded, &e))?;
+        }
+    }
     std::fs::write(&output, wasm)?;
     // Progress goes to stderr: `run`, `check`, and `dist` may rebuild first,
     // and an app's piped stdout must stay the app's alone.
@@ -404,8 +419,15 @@ fn validate_error(
     error: &wasmtime::Error,
 ) -> wasmtime::Error {
     let detail = format!("{error:#}");
+    let scan = scan_module(&expanded.text);
+    let module = module_index(&detail).unwrap_or(0);
     let located = function_index(&detail)
-        .and_then(|index| scan_module(&expanded.text).functions.get(index).copied())
+        .and_then(|index| {
+            scan.modules
+                .get(module)
+                .and_then(|module| module.functions.get(index))
+                .copied()
+        })
         .map(|line| (expanded.origin(line), expanded.line_text(line).to_string()));
     let Some(((file, source_line), text)) = located else {
         return wasmtime::Error::msg(format!("`{}` failed validation: {detail}", root.display()));
@@ -416,6 +438,17 @@ fn validate_error(
         file.display(),
         text.trim_end(),
     ))
+}
+
+/// Recover the Core module index from a compiler message. A Core app has one
+/// module; a component may instantiate several.
+fn module_index(detail: &str) -> Option<usize> {
+    let rest = detail.split("wasm[").nth(1)?;
+    rest.chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
 }
 
 /// Recover a Core WASM function index from a validator or compiler message.
@@ -433,7 +466,7 @@ fn function_index(detail: &str) -> Option<usize> {
     detail.split("func ").nth(1).and_then(digits)
 }
 
-/// A named module-level data segment, plus the byte range of its whole form.
+/// A named data segment, plus the byte range of its whole form.
 struct DataSegment {
     name: String,
     line: usize,
@@ -441,17 +474,25 @@ struct DataSegment {
     end: usize,
 }
 
-/// One pass over a WAT module: enough structure to translate validator output
+/// One Core WASM module found in the source: a plain `(module ...)` app, or a
+/// `(core module ...)` inside a component.
+struct ModuleScan {
+    start: usize,
+    /// Byte index of the paren closing this module.
+    close: usize,
+    /// Source line of every function in Core index order: imported functions
+    /// first, then the ones defined in the body.
+    functions: Vec<usize>,
+    data: Vec<DataSegment>,
+}
+
+/// One pass over a WAT source: enough structure to translate validator output
 /// and to generate the address/length globals for named data segments.
 /// Comments and string literals are skipped, so `(func` or `(data` inside them
 /// never counts.
 struct Scan {
-    /// Source line of every module-level function in Core WASM index order:
-    /// imported functions first, then the functions defined in the body.
-    functions: Vec<usize>,
-    data: Vec<DataSegment>,
-    /// Byte index of the paren that closes the outermost form.
-    close: Option<usize>,
+    /// Modules in source order, which is also Core module index order.
+    modules: Vec<ModuleScan>,
 }
 
 /// A form the scanner has entered but not yet left.
@@ -460,17 +501,30 @@ struct Frame<'a> {
     name: Option<String>,
     line: usize,
     start: usize,
+    imported: Vec<usize>,
+    defined: Vec<usize>,
+    data: Vec<DataSegment>,
+}
+
+impl<'a> Frame<'a> {
+    fn new(head: &'a str, name: Option<String>, line: usize, start: usize) -> Self {
+        Frame {
+            head,
+            name,
+            line,
+            start,
+            imported: Vec::new(),
+            defined: Vec::new(),
+            data: Vec::new(),
+        }
+    }
 }
 
 fn scan_module(text: &str) -> Scan {
     let bytes = text.as_bytes();
     let mut open: Vec<Frame<'_>> = Vec::new();
-    let mut imported: Vec<usize> = Vec::new();
-    let mut defined: Vec<usize> = Vec::new();
     let mut scan = Scan {
-        functions: Vec::new(),
-        data: Vec::new(),
-        close: None,
+        modules: Vec::new(),
     };
     let mut line = 1usize;
     let mut block = 0usize;
@@ -523,43 +577,60 @@ fn scan_module(text: &str) -> Scan {
             b'(' => {
                 let start = i;
                 i += 1;
-                let head = &text[i..i + token_len(&bytes[i..])];
+                let mut head = &text[i..i + token_len(&bytes[i..])];
                 i += head.len();
-                let at_module_level = matches!(open.as_slice(), [outer] if outer.head == "module");
-                if head == "func" {
-                    match open.as_slice() {
-                        [outer] if outer.head == "module" => defined.push(line),
-                        [outer, inner] if outer.head == "module" && inner.head == "import" => {
-                            imported.push(line)
-                        }
-                        _ => {}
+                // `core module`, `core func`, `core instance`: the second word
+                // is what identifies the form.
+                if head == "core" {
+                    let skipped = leading_space(&bytes[i..]);
+                    let after = i + skipped;
+                    let len = token_len(&bytes[after..]);
+                    if len > 0 {
+                        head = &text[after..after + len];
+                        line += bytes[i..after].iter().filter(|b| **b == b'\n').count();
+                        i = after + len;
                     }
                 }
-                // Only a named module-level segment opts in to generated globals.
-                let name = if head == "data" && at_module_level {
+                let depth = open.len();
+                if head == "func" {
+                    if depth >= 1 && open[depth - 1].head == "module" {
+                        open[depth - 1].defined.push(line);
+                    } else if depth >= 2
+                        && open[depth - 1].head == "import"
+                        && open[depth - 2].head == "module"
+                    {
+                        open[depth - 2].imported.push(line);
+                    }
+                }
+                // Only a named segment directly inside a module opts in.
+                let name = if head == "data" && depth >= 1 && open[depth - 1].head == "module" {
                     identifier(text, &bytes[i..], i)
                 } else {
                     None
                 };
-                open.push(Frame {
-                    head,
-                    name,
-                    line,
-                    start,
-                });
+                open.push(Frame::new(head, name, line, start));
             }
             b')' => {
                 if let Some(frame) = open.pop() {
                     if let Some(name) = frame.name {
-                        scan.data.push(DataSegment {
-                            name,
-                            line: frame.line,
-                            start: frame.start,
-                            end: i,
-                        });
+                        if let Some(parent) = open.last_mut() {
+                            parent.data.push(DataSegment {
+                                name,
+                                line: frame.line,
+                                start: frame.start,
+                                end: i,
+                            });
+                        }
                     }
-                    if open.is_empty() && scan.close.is_none() {
-                        scan.close = Some(i);
+                    if frame.head == "module" {
+                        let mut functions = frame.imported;
+                        functions.extend(frame.defined);
+                        scan.modules.push(ModuleScan {
+                            start: frame.start,
+                            close: i,
+                            functions,
+                            data: frame.data,
+                        });
                     }
                 }
                 i += 1;
@@ -567,8 +638,7 @@ fn scan_module(text: &str) -> Scan {
             _ => i += 1,
         }
     }
-    imported.extend(defined);
-    scan.functions = imported;
+    scan.modules.sort_by_key(|module| module.start);
     scan
 }
 
@@ -577,6 +647,13 @@ fn token_len(bytes: &[u8]) -> usize {
     bytes
         .iter()
         .position(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b';' | b'"'))
+        .unwrap_or(bytes.len())
+}
+
+fn leading_space(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
         .unwrap_or(bytes.len())
 }
 
@@ -598,55 +675,58 @@ fn identifier(text: &str, rest: &[u8], offset: usize) -> Option<String> {
 /// instead of restating it. Unnamed segments are untouched.
 fn append_data_globals(expanded: &mut Expanded) -> Result<()> {
     let scan = scan_module(&expanded.text);
-    if scan.data.is_empty() {
-        return Ok(());
-    }
-    let Some(close) = scan.close else {
-        return fail("named data segments need a closed `(module ...)` form".into());
-    };
-
-    let mut generated = String::new();
-    let mut origins = Vec::new();
-    let mut placed: Vec<(&str, u32, u32)> = Vec::new();
-    for segment in &scan.data {
-        let form = &expanded.text[segment.start..=segment.end];
-        let (file, line) = expanded.origin(segment.line);
-        let described = format!("{} at {}:{line}", segment.name, file.display());
-        let address = data_address(form, &described)?;
-        let length = data_length(form, &described)?;
-        for (other, other_address, other_length) in &placed {
-            if address < other_address + other_length && *other_address < address + length {
-                return fail(format!(
-                    "data segment `{}` overlaps `{other}`: {address}..{} vs {other_address}..{}",
-                    segment.name,
-                    address + length,
-                    other_address + other_length
-                ));
+    // Insert from the last module backwards so earlier byte offsets stay valid.
+    let mut modules: Vec<&ModuleScan> = scan
+        .modules
+        .iter()
+        .filter(|module| !module.data.is_empty())
+        .collect();
+    modules.sort_by_key(|module| std::cmp::Reverse(module.close));
+    for module in modules {
+        let mut generated = String::new();
+        let mut origins = Vec::new();
+        let mut placed: Vec<(&str, u32, u32)> = Vec::new();
+        for segment in &module.data {
+            let form = &expanded.text[segment.start..=segment.end];
+            let (file, line) = expanded.origin(segment.line);
+            let described = format!("{} at {}:{line}", segment.name, file.display());
+            let address = data_address(form, &described)?;
+            let length = data_length(form, &described)?;
+            for (other, other_address, other_length) in &placed {
+                if address < other_address + other_length && *other_address < address + length {
+                    return fail(format!(
+                        "data segment `{}` overlaps `{other}`: {address}..{} vs {other_address}..{}",
+                        segment.name,
+                        address + length,
+                        other_address + other_length
+                    ));
+                }
             }
+            placed.push((&segment.name, address, length));
+            generated.push_str(&format!(
+                "  (global {name}.ptr i32 (i32.const {address})) (global {name}.len i32 (i32.const {length}))\n",
+                name = segment.name,
+            ));
+            origins.push((file, line));
         }
-        placed.push((&segment.name, address, length));
-        generated.push_str(&format!(
-            "  (global {name}.ptr i32 (i32.const {address})) (global {name}.len i32 (i32.const {length}))\n",
-            name = segment.name,
-        ));
-        origins.push((file, line));
-    }
 
-    // Insert at the closing paren's exact byte, never at a line boundary: a
-    // line boundary can fall inside a multi-line form.
-    let line_of_close = expanded.text[..close].matches('\n').count() + 1;
-    expanded.text = format!(
-        "{}\n{generated}{}",
-        &expanded.text[..close],
-        &expanded.text[close..]
-    );
-    // The closing paren's line becomes a prefix line, the generated lines, and
-    // a remainder line; prefix and remainder keep the original origin.
-    let carried = expanded.origin(line_of_close);
-    origins.push(carried);
-    expanded
-        .origins
-        .splice(line_of_close..line_of_close, origins);
+        // Insert at the closing paren's exact byte, never at a line boundary: a
+        // line boundary can fall inside a multi-line form.
+        let close = module.close;
+        let line_of_close = expanded.text[..close].matches('\n').count() + 1;
+        expanded.text = format!(
+            "{}\n{generated}{}",
+            &expanded.text[..close],
+            &expanded.text[close..]
+        );
+        // The closing paren's line becomes a prefix line, the generated lines,
+        // and a remainder line; prefix and remainder keep the original origin.
+        let carried = expanded.origin(line_of_close);
+        origins.push(carried);
+        expanded
+            .origins
+            .splice(line_of_close..line_of_close, origins);
+    }
     Ok(())
 }
 
@@ -789,6 +869,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
                 Target::Native => "native",
                 Target::Browser => "browser",
                 Target::Gui => "gui",
+                Target::Component => "component",
             }
             .into(),
         ),
@@ -838,7 +919,10 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             manifest_out.insert("guest".into(), toml::Value::String(guest.clone()));
         }
     }
-    if matches!(manifest.target, Target::Native | Target::Gui) {
+    if matches!(
+        manifest.target,
+        Target::Native | Target::Gui | Target::Component
+    ) {
         let mut libs = Vec::new();
         for lib in &manifest.libs {
             let path = copy_bundle_file(&base, &dist, &lib.path)?;
@@ -911,6 +995,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             Target::Native => "native",
             Target::Browser => "browser",
             Target::Gui => "GUI",
+            Target::Component => "component",
         },
         dist.display()
     );
@@ -1093,6 +1178,9 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
     }
     if manifest.target == Target::Gui {
         return check_gui(engine, manifest_path, manifest, &base);
+    }
+    if manifest.target == Target::Component {
+        return crate::component::check(engine, manifest_path, manifest, &base);
     }
     let linked = link_all(engine, manifest, &base)?;
     let app_mod =
@@ -1394,6 +1482,7 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
     let (starter, manifest) = match target {
         Target::Browser => browser_starter(name),
         Target::Gui => gui_starter(name),
+        Target::Component => component_starter(name),
         Target::Native => {
             let starter = format!(
                 ";; {name}.wat — {name} app, hosted by host-rs.\n\
@@ -1583,7 +1672,7 @@ fn prompt_target() -> Result<Target> {
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         return select_target();
     }
-    print!("target [native/browser/gui] (native): ");
+    print!("target [native/browser/gui/component] (native): ");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
@@ -1591,8 +1680,9 @@ fn prompt_target() -> Result<Target> {
         "" | "native" => Ok(Target::Native),
         "browser" => Ok(Target::Browser),
         "gui" => Ok(Target::Gui),
+        "component" => Ok(Target::Component),
         other => fail(format!(
-            "unknown target `{other}`: choose native, browser, or gui"
+            "unknown target `{other}`: choose native, browser, gui, or component"
         )),
     }
 }
@@ -1624,9 +1714,13 @@ fn select_target() -> Result<Target> {
             Print("Create target (Up/Down, Enter):\r\n")
         )?;
         for (index, (name, description)) in [
-            ("Native", "WASI, terminal, server, and WASM libraries"),
+            (
+                "Native",
+                "WASI Preview 1, terminal, server, and WASM libraries",
+            ),
             ("Browser", "Canvas application served to a web browser"),
             ("GUI", "Native egui desktop application"),
+            ("Component", "WASM component on WASI 0.2"),
         ]
         .iter()
         .enumerate()
@@ -1635,7 +1729,7 @@ fn select_target() -> Result<Target> {
             if index == selected {
                 execute!(out, SetAttribute(Attribute::Bold))?;
             }
-            execute!(out, Print(format!(" {marker} {name:<7} {description}\r\n")))?;
+            execute!(out, Print(format!(" {marker} {name:<9} {description}\r\n")))?;
             if index == selected {
                 execute!(out, SetAttribute(Attribute::Reset))?;
             }
@@ -1660,16 +1754,15 @@ fn select_target() -> Result<Target> {
                 selected = selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                selected = (selected + 1).min(2);
+                selected = (selected + 1).min(3);
             }
             KeyCode::Enter => {
                 println!();
-                return Ok(if selected == 0 {
-                    Target::Native
-                } else if selected == 1 {
-                    Target::Browser
-                } else {
-                    Target::Gui
+                return Ok(match selected {
+                    0 => Target::Native,
+                    1 => Target::Browser,
+                    2 => Target::Gui,
+                    _ => Target::Component,
                 });
             }
             KeyCode::Esc => {
@@ -1683,7 +1776,7 @@ fn select_target() -> Result<Target> {
             _ => continue,
         }
         let mut out = io::stdout();
-        execute!(out, MoveUp(5))
+        execute!(out, MoveUp(6))
             .map_err(|e| wasmtime::Error::msg(format!("terminal redraw: {e}")))?;
         draw(selected).map_err(|e| wasmtime::Error::msg(format!("terminal draw: {e}")))?;
     }
@@ -1716,6 +1809,24 @@ fn browser_starter(name: &str) -> (String, String) {
          source = \"{name}.wat\"\n\
          path = \"{name}.wasm\"\n\
          run = \"start\"\n"
+    );
+    (starter, manifest)
+}
+
+/// A WASI 0.2 command component, authored as component WAT. `host-rs` assembles
+/// it in-process: the component path needs no bindings generator and no
+/// language toolchain, exactly like the Core path.
+fn component_starter(name: &str) -> (String, String) {
+    let starter = include_str!("../templates/component-starter.wat").replace("__NAME__", name);
+    let manifest = format!(
+        "# {name}: WASM component on WASI 0.2.\n\
+         target = \"component\"\n\
+         mode = \"command\"\n\
+         \n\
+         [app]\n\
+         source = \"{name}.wat\"\n\
+         path = \"{name}.wasm\"\n\
+         run = \"wasi:cli/run\"\n"
     );
     (starter, manifest)
 }
@@ -1833,13 +1944,13 @@ mod tests {
 )
 ";
         // Imported functions come first in the index space, then definitions.
-        assert_eq!(scan_module(text).functions, vec![4, 6, 8]);
+        assert_eq!(scan_module(text).modules[0].functions, vec![4, 6, 8]);
     }
 
     #[test]
     fn scanned_functions_ignore_block_comments() {
         let text = "(module (; (func hidden) ;) (func $only))\n";
-        assert_eq!(scan_module(text).functions, vec![1]);
+        assert_eq!(scan_module(text).modules[0].functions, vec![1]);
     }
 
     #[test]
@@ -1851,10 +1962,11 @@ mod tests {
 )
 ";
         let scan = scan_module(text);
-        assert_eq!(scan.data.len(), 1, "only a named segment opts in");
-        assert_eq!(scan.data[0].name, "$banner");
-        assert_eq!(scan.data[0].line, 3);
-        let form = &text[scan.data[0].start..=scan.data[0].end];
+        let data = &scan.modules[0].data;
+        assert_eq!(data.len(), 1, "only a named segment opts in");
+        assert_eq!(data[0].name, "$banner");
+        assert_eq!(data[0].line, 3);
+        let form = &text[data[0].start..=data[0].end];
         assert_eq!(form, "(data $banner (i32.const 4096) \"hi\")");
     }
 

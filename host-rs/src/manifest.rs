@@ -17,6 +17,9 @@ pub enum Target {
     Native,
     Browser,
     Gui,
+    /// WASM Component + WASI 0.2. A separate linking domain from the Core
+    /// targets above, so it shares the manifest and nothing else.
+    Component,
 }
 
 fn default_target() -> Target {
