@@ -2,6 +2,12 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Prompt UX example + self-explaining empty-dir scaffold
+- `examples/prompts/`: direct WAT command app using WASI stdio only: text default, numbered select/retry, comma/space multiselect/retry, confirm/cancel, named exit codes. Valid scripted runs (including retry/cancel) plus `check` green. It is intentionally line-based, not raw-terminal Clack — raw mode/key events require a capability the harness does not expose.
+- `host-rs new <name>` creates `<name>/<name>.wat`, TOML, and AGENTS.md. Template is baked with `include_str!`; strict names and never-overwrite behavior. Empty scratch-dir proof: assemble → check → run prints the generated hello exactly; rerun refuses.
+- `docs/20-own-vs-leverage.md`: decision checklist. Own thin, app-specific policy; leverage standards-heavy compatible core WASM libs. Do not embed a JS runtime for an npm UI dependency.
+- Bug caught and fixed: early line reader consumed all piped answers in one WASI fd_read; byte-at-a-time preserves each later answer. Name pointer was later overwritten by the reused input buffer; copied it to 0x200.
+
 ## 2026-09-04 — `wasm-opt` test: -O3 shrinks 5%, speed change is noise — not adopted
 - `wasm-opt -O3 --enable-bulk-memory --enable-multivalue` (v130 defaults to MVP; our modules need both flags or validation fails) on `server.wasm` (2254→2115B) + `http.wasm` (1786→1714B). `-Oz` identical size (2114B). Semantics re-verified on the opt build (digest, 404, 403).
 - Bench single-mode, same script: GET 4727 vs 4679 rps, conc 6123 vs 5975, 404/POST rows moved ±few % both directions — all inside run-to-run variance. Expected: peephole/DCE can't touch syscall/segment-dominated cost.

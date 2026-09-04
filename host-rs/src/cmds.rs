@@ -22,7 +22,9 @@ COMMANDS:
                                 needs and offers — start here for other
                                 languages' .wasm output
   init <app.wasm>               scaffold a <app>.toml stub from the app's
-                                own imports (never overwrites)
+                                 own imports (never overwrites)
+  new <name>                    scaffold a project dir: <name>.wat +
+                                 <name>.toml + AGENTS.md (never overwrites)
   help, -h, --help              this text
   version, -V, --version        version
 
@@ -30,7 +32,8 @@ EXAMPLES:
   host-rs run examples/server/manifest.toml
   host-rs check examples/server/manifest.toml
   host-rs inspect libs/sha256/sha256.wasm
-  host-rs init myapp.wasm",
+  host-rs init myapp.wasm
+  host-rs new myapp",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -261,6 +264,96 @@ fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()
             Err(e) => eprintln!("accept: {e}"),
         }
     }
+    Ok(())
+}
+
+/// Scaffold a full project dir: starter .wat + manifest + AGENTS.md.
+/// The AGENTS.md template is baked into the binary (include_str!) so a
+/// fresh project carries the harness rules with it. Never overwrites.
+pub fn cmd_new(name: &str) -> Result<()> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return fail(format!("bad project name `{name}`: use [A-Za-z0-9_-]"));
+    }
+    let dir = std::path::Path::new(name);
+    if dir.exists() {
+        let empty = std::fs::read_dir(dir)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
+        if !empty {
+            return fail(format!("`{name}` exists and is not empty, refusing"));
+        }
+    } else {
+        std::fs::create_dir_all(dir)?;
+    }
+    let wat = dir.join(format!("{name}.wat"));
+    let toml = dir.join(format!("{name}.toml"));
+    let agents = dir.join("AGENTS.md");
+    for p in [&wat, &toml, &agents] {
+        if p.exists() {
+            return fail(format!("`{}` exists, refusing to overwrite", p.display()));
+        }
+    }
+    let hello = format!("hello from {name}\n");
+    let starter = format!(
+        ";; {name}.wat — {name} app, hosted by host-rs.\n\
+         ;; Build: wat2wasm {name}.wat -o {name}.wasm\n\
+         ;; Check: host-rs check {name}.toml\n\
+         ;; Run:   host-rs {name}.toml\n\
+         ;;\n\
+         ;; Command-mode contract: own memory (export it for WASI),\n\
+         ;; WASI stdio, `_start` entry, `proc_exit` code is the exit code.\n\
+         ;; Need sockets, shared libs, or bridges? New needs go in the\n\
+         ;; manifest (TOML), never in harness code.\n\
+         \n\
+         (module\n\
+         \x20 (import \"wasi_snapshot_preview1\" \"fd_write\"\n\
+         \x20   (func $fd_write (param i32 i32 i32 i32) (result i32)))\n\
+         \x20 (import \"wasi_snapshot_preview1\" \"proc_exit\"\n\
+         \x20   (func $exit (param i32)))\n\
+         \x20 (memory 1)\n\
+         \x20 (export \"memory\" (memory 0))\n\
+         \n\
+         \x20 (func (export \"_start\")\n\
+         \x20   (i32.store (i32.const 0) (i32.const 0x1000))\n\
+         \x20   (i32.store (i32.const 4) (i32.const {hlen}))\n\
+         \x20   (call $fd_write (i32.const 1) (i32.const 0)\n\
+         \x20     (i32.const 1) (i32.const 8))\n\
+         \x20   (drop)\n\
+         \x20   (call $exit (i32.const 0))\n\
+         \x20   (unreachable))\n\
+         \n\
+         \x20 (data (i32.const 0x1000) \"{hello}\")\n\
+         )\n",
+        name = name,
+        // WAT string syntax needs an escaped newline, not a literal one;
+        // otherwise the byte count includes a byte absent from the data.
+        hello = hello.escape_default(),
+        hlen = hello.len()
+    );
+    let manifest = format!(
+        "# {name}: command-mode app. Build the .wasm first:\n\
+         #   wat2wasm {name}.wat -o {name}.wasm\n\
+         # then: host-rs check {name}.toml && host-rs {name}.toml\n\
+         mode = \"command\"\n\
+         \n\
+         [app]\n\
+         path = \"{name}.wasm\"\n\
+         run = \"_start\"\n"
+    );
+    std::fs::write(&wat, starter)?;
+    std::fs::write(&toml, manifest)?;
+    std::fs::write(
+        &agents,
+        include_str!("../templates/project-agents.md").replace("__APPNAME__", name),
+    )?;
+    println!(
+        "created {name}/:\n  {name}.wat\n  {name}.toml\n  AGENTS.md\n\
+         next:\n  cd {name} && wat2wasm {name}.wat -o {name}.wasm && host-rs check {name}.toml"
+    );
     Ok(())
 }
 

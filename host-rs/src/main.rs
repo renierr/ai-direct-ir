@@ -48,6 +48,12 @@ fn main() -> Result<()> {
             }
             cmds::cmd_init(&engine, arg1)
         }
+        "new" => {
+            if arg1.is_empty() {
+                return usage_err("missing project name", "host-rs new <name>");
+            }
+            cmds::cmd_new(arg1)
+        }
         "run" => {
             if arg1.is_empty() {
                 return usage_err("missing manifest", "host-rs run <manifest.toml>");

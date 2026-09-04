@@ -1,0 +1,7 @@
+# clack-style CLI prompts (line-based): WASI stdio only, own memory.
+# Pipe answers to script it: printf 'demo\n2\n1,3\ny\n' | host-rs ...
+mode = "command"
+
+[app]
+path = "prompts.wasm"
+run = "_start"
