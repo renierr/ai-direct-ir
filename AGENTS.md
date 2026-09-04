@@ -74,6 +74,9 @@ Start with `host-rs inspect <file>`.
 - WAT: memory map in the file header comment; lib address maps are ABI.
 - `;; @include <path>` splits a root WAT into fragments. Paths are relative to
   the root source's directory at every depth, never absolute and never `..`.
+- Never hand-write a string length. Name the segment — `(data $msg (i32.const
+  0x1000) "...")` — and read `$msg.ptr` / `$msg.len`, which host-rs derives.
+  Named segments need a literal offset and may not overlap.
 - Manifest per app, next to its modules; `host-rs init` scaffolds it.
 - Commit messages: short imperative summary. Push when asked or when a
   unit of work completes.

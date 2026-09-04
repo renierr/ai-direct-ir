@@ -48,7 +48,12 @@ force-rebuild command.
 `host-rs build` assembles, validates, *and* compiles the module before writing
 the artifact, so a build never leaves a broken `.wasm` behind. Assembly and
 validation errors are reported against the fragment file and line the author
-wrote, not against the expanded text.
+wrote, not against the expanded text. Build progress goes to stderr, so an
+app's piped stdout stays the app's alone.
+
+Naming a data segment — `(data $msg (i32.const 0x1000) "...")` — gets you
+`$msg.ptr` and `$msg.len` from the harness, so a string's byte count is never
+written by hand and can never go stale.
 
 A prebuilt component needs only `host-rs` to check, run, or distribute. How a
 root component gets composed with prebuilt provider components is still an open

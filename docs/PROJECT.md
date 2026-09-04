@@ -77,6 +77,37 @@ include cannot be absolute or contain `..`; fragments must not add another
 `(module ...)`. This is source organization, not provider composition. A
 separate Core WASM module remains a declared provider with an explicit ABI.
 
+### Named Data Segments
+
+A string in Core WAT needs a pointer and a byte count, and a hand-written count
+goes stale on the next text edit without ever failing validation. Naming the
+segment moves the count to the harness:
+
+```wat
+(func (export "_start")
+  (call $print (global.get $banner.ptr) (global.get $banner.len)))
+
+(data $banner (i32.const 0x1000) "  AI-Direct Mail\n" "  ----\n")
+```
+
+For every `(data $name (i32.const <addr>) "...")` at module level, `host-rs`
+appends `(global $name.ptr i32 ...)` and `(global $name.len i32 ...)` before
+parsing. The length is the decoded byte count, so `\n`, `\1b`, `\u{25c6}`, and
+literal multi-byte characters all measure correctly; an escape the harness
+cannot measure is an error rather than a guess. Named segments must place
+themselves at a literal offset, and two of them may not overlap.
+
+Unnamed segments are untouched, so naming is the opt-in. The scaffolds, the
+`hello` and `gui-hello` examples, and the mail example use named segments;
+`pi`, `prompts`, `prompts-raw`, and `server` still pack tables at
+hand-assigned addresses and have not been converted.
+
+Addresses are still author-owned. Letting the harness assign them as well would
+remove the other hand-maintained number — `examples/prompts/prompts.wat` chains
+addresses so that each depends on the previous string's length — but that means
+the harness owning the memory map, which the `[[libs]]` shared-memory address
+maps also depend on. That is a separate decision.
+
 New projects contain `src/README.md` and the generic
 `.agents/skills/ai-direct-ir/SKILL.md`. The skill covers WAT/WASM/WIT/provider
 workflow and environment rules; project behavior belongs in its docs and
@@ -96,8 +127,12 @@ cargo test --manifest-path host-rs/Cargo.toml
 `host-rs/tests/cli.rs` drives the real binary end to end: scaffold, build,
 check, run; a rejected invalid module with the previous artifact intact;
 assembly and validation errors naming the authored fragment; nested includes;
-rejected cycles, `..` paths, and missing fragments; every repository example
+rejected cycles, `..` paths, and missing fragments; named data segments
+supplying their own pointer and length across escapes and multi-byte
+characters, following a text edit, and rejecting overlaps and computed offsets;
+build progress staying off the application's stdout; every repository example
 checking; and the `hello` and `pi` examples producing their expected stdout.
+Unit tests cover the module scanner, address parsing, and byte-length decoding.
 
 Every example manifest now declares its `source`, so the tracked `.wasm` is
 rebuilt from the tracked `.wat` instead of drifting from it. `hello`, `pi`, and
@@ -237,29 +272,22 @@ compatibility layer.
 Ordered so that each step is provable on its own, and so the catalog stops
 being specification-only before more specification is written.
 
-1. Remove hand-maintained data lengths from authored WAT. Every `(data ...)`
-   paired with a matching `(i32.const <len>)` is a silent-corruption bug waiting
-   for the next text edit; it already truncated the mail example's inbox by 233
-   bytes, and the `new` template teaches the pattern. A generic source
-   affordance in `host-rs` — a named data segment whose length the harness
-   emits — removes the whole class. This is the single highest-value harness
-   change for AI-authored WAT.
-2. Build the first provider package in `ai-direct-ir-providers`: SHA-256 with
+1. Build the first provider package in `ai-direct-ir-providers`: SHA-256 with
    WIT, provenance, license notice, component artifact, hash, and a conformance
    test. `libs/sha256/` already exists as a Rust crate, so the only new work is
    the component and the package discipline. This falsifies the catalog's format
    documents cheaply, before more are written against no evidence.
-3. Add an additive component-app manifest kind that accepts either a prebuilt
+2. Add an additive component-app manifest kind that accepts either a prebuilt
    component or a `(component ...)` WAT source — the embedded parser already
    handles both. Keep all existing Core paths intact.
-4. Add a Wasmtime Component/WASI 0.2 linker (`p2::add_to_linker_sync`) and make
+3. Add a Wasmtime Component/WASI 0.2 linker (`p2::add_to_linker_sync`) and make
    `host-rs check`, `run`, and `dist` validate, instantiate, execute, and package
-   that component. Consume the SHA-256 provider from step 2 as the proof.
-5. Decide the composition mechanism only once step 4 needs to wire a root
+   that component. Consume the SHA-256 provider from step 1 as the proof.
+4. Decide the composition mechanism only once step 3 needs to wire a root
    component to a prebuilt provider binary. See The Open Composition Decision.
-6. Add a separate component consumer proof. Do not force the existing Core WAT
+5. Add a separate component consumer proof. Do not force the existing Core WAT
    mail app to call a WIT component without an explicit component boundary.
-7. After the component path works, present SQLite candidates for approval;
+6. After the component path works, present SQLite candidates for approval;
    only then add a generic writable data capability and `mail-store` provider.
 
 ## Maintenance
