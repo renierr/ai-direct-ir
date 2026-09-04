@@ -17,6 +17,8 @@ requested application while preserving the target runtime contract.
   memory ownership are ABI, not incidental implementation details.
 - Keep generated `.wasm` out of source control unless this application
   deliberately distributes it.
+- `.gitignore` excludes generated build output and the future `dist/` release
+  bundle. Keep distributable artifacts there rather than beside source files.
 
 ## Workflow
 

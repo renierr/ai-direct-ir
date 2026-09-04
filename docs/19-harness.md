@@ -40,7 +40,8 @@ host-rs serve
 `browser`. A browser project gets `index.html` and a baked-in `web-host.js`;
 after `build` and `check`, use `host-rs serve` to serve its directory on
 localhost with the required WASM MIME type. `host-rs run` only executes native
-apps.
+apps. In a real terminal, choose with Up/Down (or `j`/`k`) and Enter; piped
+input retains the `native`/`browser` text prompt for scripts and CI.
 
 The generated `README.md` and `AGENTS.md` are application documentation, not
 copies of this harness manual. `new` renders them for the selected target:
@@ -49,6 +50,10 @@ projects describe the Canvas lifecycle, `web-host.js`, and browser-only ABI
 rules. Both state that the scaffold is a minimal working example for an AI to
 change into the requested application. The other target's instructions are
 intentionally omitted.
+
+Every new project also receives a baked-in `.gitignore`. It excludes generated
+WASM, Cargo and native build output, common JavaScript build directories, and
+`dist/`, which is reserved for a future distribution bundle command.
 
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
 per-OS (25 MB release); the `.wasm` files are portable.

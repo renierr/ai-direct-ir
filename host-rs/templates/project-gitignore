@@ -1,0 +1,27 @@
+# Generated WASM and future distributable bundles.
+*.wasm
+dist/
+
+# Rust / Cargo outputs (including optional local WASM libraries).
+target/
+**/target/
+**/Cargo.lock
+
+# C/C++ and other native build outputs.
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# JavaScript package and build outputs, if this project adds tooling later.
+node_modules/
+coverage/
+.vite/
+
+# Editor and operating-system noise.
+.DS_Store
+*~
+.idea/
+.vscode/

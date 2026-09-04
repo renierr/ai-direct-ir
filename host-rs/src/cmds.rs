@@ -31,12 +31,13 @@ COMMANDS:
   version, -V, --version        version
 
 EXAMPLES:
-  host-rs run examples/server/manifest.toml
-  host-rs check examples/server/manifest.toml
-  cd myapp && host-rs build && host-rs check && host-rs run
-  host-rs inspect libs/sha256/sha256.wasm
-  host-rs init myapp.wasm
-  host-rs new myapp",
+  host-rs new myapp                 # choose native or browser
+  cd myapp && host-rs build
+  host-rs check                      # validate host.toml and the compiled app
+  host-rs run                        # native project
+  host-rs serve                      # browser project
+  host-rs inspect external-lib.wasm  # inspect a prebuilt module's ABI
+  host-rs init existing-app.wasm     # write a host.toml stub beside it",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -488,9 +489,10 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let toml = dir.join("host.toml");
     let readme = dir.join("README.md");
     let agents = dir.join("AGENTS.md");
+    let gitignore = dir.join(".gitignore");
     let index = dir.join("index.html");
     let web_host = dir.join("web-host.js");
-    let mut files = vec![&wat, &toml, &readme, &agents];
+    let mut files = vec![&wat, &toml, &readme, &agents, &gitignore];
     if target == Target::Browser {
         files.extend([&index, &web_host]);
     }
@@ -553,6 +555,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
     };
     std::fs::write(&wat, starter)?;
     std::fs::write(&toml, manifest)?;
+    std::fs::write(&gitignore, include_str!("../templates/project-gitignore"))?;
     std::fs::write(
         &readme,
         project_doc(
@@ -582,7 +585,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
         ""
     };
     println!(
-        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md{extra}\n\
+        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n  .gitignore{extra}\n\
          next:\n  cd {name} && host-rs build && host-rs check{}",
         if target == Target::Browser {
             " && host-rs serve"
@@ -631,7 +634,10 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
 }
 
 fn prompt_target() -> Result<Target> {
-    use std::io::{self, Write};
+    use std::io::{self, IsTerminal, Write};
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        return select_target();
+    }
     print!("target [native/browser] (native): ");
     io::stdout().flush()?;
     let mut input = String::new();
@@ -642,6 +648,95 @@ fn prompt_target() -> Result<Target> {
         other => fail(format!(
             "unknown target `{other}`: choose native or browser"
         )),
+    }
+}
+
+/// A compact selector keeps interactive `new` discoverable without giving up
+/// the line-input fallback needed by piped scripts and CI.
+fn select_target() -> Result<Target> {
+    use crossterm::{
+        cursor::{MoveToColumn, MoveUp},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+        execute,
+        style::{Attribute, Print, SetAttribute},
+        terminal::{disable_raw_mode, enable_raw_mode},
+    };
+    use std::io::{self, Write};
+
+    struct RawMode;
+    impl Drop for RawMode {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+        }
+    }
+
+    fn draw(selected: usize) -> std::io::Result<()> {
+        let mut out = io::stdout();
+        execute!(
+            out,
+            MoveToColumn(0),
+            Print("Create target (Up/Down, Enter):\r\n")
+        )?;
+        for (index, (name, description)) in [
+            ("Native", "WASI, terminal, server, and WASM libraries"),
+            ("Browser", "Canvas application served to a web browser"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let marker = if index == selected { ">" } else { " " };
+            if index == selected {
+                execute!(out, SetAttribute(Attribute::Bold))?;
+            }
+            execute!(out, Print(format!(" {marker} {name:<7} {description}\r\n")))?;
+            if index == selected {
+                execute!(out, SetAttribute(Attribute::Reset))?;
+            }
+        }
+        execute!(out, Print("\r\n"))?;
+        out.flush()
+    }
+
+    enable_raw_mode().map_err(|e| wasmtime::Error::msg(format!("terminal raw mode: {e}")))?;
+    let _raw = RawMode;
+    let mut selected = 0;
+    draw(selected).map_err(|e| wasmtime::Error::msg(format!("terminal draw: {e}")))?;
+    loop {
+        let event =
+            event::read().map_err(|e| wasmtime::Error::msg(format!("terminal read: {e}")))?;
+        let Event::Key(key) = event else { continue };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                selected = selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                selected = (selected + 1).min(1);
+            }
+            KeyCode::Enter => {
+                println!();
+                return Ok(if selected == 0 {
+                    Target::Native
+                } else {
+                    Target::Browser
+                });
+            }
+            KeyCode::Esc => {
+                println!();
+                return fail("project creation cancelled".into());
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                println!();
+                return fail("project creation cancelled".into());
+            }
+            _ => continue,
+        }
+        let mut out = io::stdout();
+        execute!(out, MoveUp(4))
+            .map_err(|e| wasmtime::Error::msg(format!("terminal redraw: {e}")))?;
+        draw(selected).map_err(|e| wasmtime::Error::msg(format!("terminal draw: {e}")))?;
     }
 }
 

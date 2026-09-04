@@ -31,6 +31,7 @@ __TARGET_WORKFLOW__
 | `__APPNAME__.wasm` | Generated artifact. Rebuild; do not edit it directly. |
 | `host.toml` | Target, entry point, and application configuration. |
 __TARGET_FILES__
+| `.gitignore` | Excludes generated artifacts, local build output, and `dist/` release bundles. |
 | `AGENTS.md` | Implementation and verification rules for this application. |
 
 ## Application Contract
