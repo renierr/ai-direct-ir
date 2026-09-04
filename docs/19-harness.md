@@ -12,14 +12,14 @@ Run from the repo root (manifest paths resolve manifest-dir first,
 process dir second):
 
 ```bash
-./build.sh                                   # from host-rs/ — local release binary
+./build.sh                                   # from repo root — builds the host-rs harness
 host-rs examples/server/manifest.toml        # server mode
 host-rs examples/pi/pi.toml                  # command mode
 echo 100 | host-rs examples/pi/pi.toml
 host-rs examples/hello/hello.toml
 ```
 
-`host-rs/build.sh` accepts `--target <Rust target triple>` for a configured
+The root `build.sh` accepts `--target <Rust target triple>` for a configured
 cross-build. It never installs a Rust target or native linker. For example,
 building a Windows GNU executable on Linux requires the already-installed
 `x86_64-pc-windows-gnu` Rust target and a MinGW-w64 linker:
@@ -28,7 +28,7 @@ building a Windows GNU executable on Linux requires the already-installed
 ./build.sh --target x86_64-pc-windows-gnu
 ```
 
-The artifact is `target/x86_64-pc-windows-gnu/release/host-rs.exe`. Windows
+The artifact is `host-rs/target/x86_64-pc-windows-gnu/release/host-rs.exe`. Windows
 MSVC builds normally require Microsoft's toolchain on Windows.
 
 For a scaffolded project, `host.toml` declares `[app].source` and `[app].path`.

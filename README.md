@@ -25,6 +25,21 @@ See `docs/02-ir-options.md`. Summary: WASM is small (~200 opcodes), sandboxed, p
 
 See `docs/03-wasm-runtime.md`. Summary: WASM needs a host. `wasmtime + WASI` for CLI/apps, browser for UI, embedded host for libraries.
 
+## Build The Harness
+
+The project executable is `host-rs`, the Rust harness that builds, validates,
+and runs native or browser WASM projects:
+
+```bash
+./build.sh
+./host-rs/target/release/host-rs --help
+```
+
+`build.sh` runs Cargo against `host-rs/Cargo.toml` and writes the local release
+binary to `host-rs/target/release/host-rs`. It also supports configured Rust
+cross-targets such as `./build.sh --target x86_64-pc-windows-gnu`; that requires
+the target and its linker to be installed separately.
+
 ## Status
 
 - [x] Idea сформулирована / formulated

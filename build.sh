@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Build the native host executable. The current platform is the default.
+# Build the host-rs harness executable. The current platform is the default.
 set -euo pipefail
 
 usage() {
   printf '%s\n' \
     'Usage: ./build.sh [--target <triple>]' \
     '' \
-    'Builds an optimized host-rs executable with Cargo.' \
+    'Builds the optimized host-rs harness executable with Cargo.' \
     '' \
     'Examples:' \
     '  ./build.sh' \
     '  ./build.sh --target x86_64-pc-windows-gnu' \
     '' \
     'Artifacts:' \
-    '  target/release/host-rs' \
-    '  target/<triple>/release/host-rs[.exe]' \
+    '  host-rs/target/release/host-rs' \
+    '  host-rs/target/<triple>/release/host-rs[.exe]' \
     '' \
     'Cross-compilation requires that the requested Rust target and its native linker' \
     'are already installed. This script never installs them. For Windows GNU builds' \
@@ -50,9 +50,9 @@ if [[ -n "$target" ]]; then
     printf 'Rust target %q is not installed. Install it explicitly, then rerun this command.\n' "$target" >&2
     exit 1
   fi
-  cargo build --release --target "$target"
-  printf 'built target/%s/release/host-rs\n' "$target"
+  cargo build --manifest-path host-rs/Cargo.toml --release --target "$target"
+  printf 'built host-rs/target/%s/release/host-rs\n' "$target"
 else
-  cargo build --release
-  printf 'built target/release/host-rs\n'
+  cargo build --manifest-path host-rs/Cargo.toml --release
+  printf 'built host-rs/target/release/host-rs\n'
 fi
