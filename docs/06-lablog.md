@@ -2,6 +2,10 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Repo live: github.com/renierr/ai-direct-ir (public)
+- Steps: `git init -b main`, `.gitignore` (binaries, `*.cwasm`, `*.o`; `gen/` C committed deliberately for distribution), 33 files committed (`fbfaf63`), `gh` login OK but token lacked `createRepository` → user created empty repo on web → `git remote add origin` + `git push -u origin main` succeeded.
+- Learning: `gh auth login` tokens may miss repo-creation scope; website-create + CLI-push is the reliable fallback.
+
 ## 2026-09-04 — Distributable apps without Docker (portable-C shim)
 - Goal: user wants to send apps to others, no Docker.
 - Change: ported `native/wasi_shim.c` from POSIX `read`/`write` to stdio (`fread`/`fwrite`+`fflush`, `exit`) — now pure C99, builds with any compiler incl. MSVC/mingw. Rebuilt, re-verified N=1000 identical, invalid→exit 1.
