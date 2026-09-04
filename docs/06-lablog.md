@@ -2,6 +2,10 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — License pulled: GNU AGPLv3 (added via GitHub web)
+- `git pull --ff-only` → `f278fd6 Create LICENSE`, clean fast-forward.
+- Note: AGPL is strong copyleft + network clause — serving a modified app over HTTP counts as distribution. Fine for open work; revisit (MIT/Apache-2.0) if closed-source distribution is ever wanted.
+
 ## 2026-09-04 — native/gen now git-ignored (was committed by mistake)
 - Reason: generated files go stale with wasm2c versions and add 84 KB; committing them didn't even remove the wabt dependency (recipients still need `wasm-rt-*.c`). `git rm --cached`, rebuilt from scratch via `native/build.sh` to prove reproducibility, pushed.
 - Learning: generated = ignored, always; vendor explicitly if a release bundle needs to be wabt-free.
