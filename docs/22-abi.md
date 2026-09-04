@@ -1,4 +1,4 @@
-# Host ABI contract
+# Experimental Host Interfaces
 
 `host-rs` loads, composes, validates, and packages AI-authored Core WASM
 applications. It is not the catalog of application libraries. A project can
@@ -6,31 +6,22 @@ declare any number of WASM providers in its manifest and import their exports
 under project-owned namespaces. Built-in host imports are only the small set of
 effects that need a native or browser implementation.
 
-This document is the normative contract for built-in host imports. A
-project-owned provider's module exports are its contract; `host-rs check`
-proves that the complete declared graph links before an app runs or ships.
+This document records the current experimental interfaces. A project-owned
+provider's module exports are its contract; `host-rs check` proves that the
+complete declared graph links before an app runs or ships.
 
-## Versioning and compatibility
+## Builder-phase policy
 
-The ABI is currently **v1**. A module identifies its target with `target` in
-`host.toml`; its imports identify the v1 capability namespace (`ui`, `web`,
-`term`, `net`, and WASI where allowed).
+There are no users and no released compatibility promise. Change, remove, or
+replace the current manifest shape, Core WASM linker, `ui.*`/`web.*` imports,
+or generated templates whenever the design becomes clearer. Do not add shims,
+aliases, versioned namespaces, migration code, or compatibility layers merely
+to preserve builder-phase experiments.
 
-- Existing import names, parameter/result types, memory representation, and
-  documented semantics never change in v1.
-- Adding a built-in host import is backward-compatible. It must be implemented,
-  documented here, and covered by an executable example or test before release.
-- A breaking change requires a new namespace/version (for example `ui_v2`) or
-  a new major harness release with a migration path. Do not repurpose an
-  existing import.
-- A released capability may be deprecated in this document, but remains
-  available for its declared support period. Remove it only in a major ABI
-  version.
-- The harness version (`host-rs --version`) and the ABI version are separate:
-  harness patch/minor releases may add/fix capabilities without breaking v1.
-
-Generated projects should record the minimum harness version they have tested
-in their README when they depend on a newly added built-in import.
+The goal is a typed WIT/Component Model provider boundary. Current `[[libs]]`,
+`[[bridges]]`, and built-in import namespaces are proofs and transitional
+tools, not the final public application format. Preserve a previous shape only
+when it has a concrete active consumer or an explicit release commitment.
 
 The native GUI implementation is `egui` through `eframe`, currently linked
 into `host-rs`. A GUI distribution contains the harness executable and its WASM
@@ -87,7 +78,7 @@ native or GUI projects. `host-rs check` validates by linking declared modules.
 Browser projects remain tied to their generated browser host until browser-side
 provider composition is implemented.
 
-## GUI ABI v1
+## Experimental GUI Imports
 
 `target = "gui"` creates a native immediate-mode desktop application backed
 by egui. The configured zero-argument `[app].run` export is called once per UI
@@ -134,7 +125,7 @@ other providers and available built-in effects, so it is not limited to pure
 calculation. Keep effects explicit in `host.toml` and bundle every provider
 needed by the app.
 
-## Browser ABI v1
+## Experimental Browser Imports
 
 Browser apps use `target = "browser"`, `mode = "command"`, and only `web.*`.
 The implementation is the generated `web-host.js`.
@@ -149,19 +140,19 @@ The implementation is the generated `web-host.js`.
 
 `web.request_frame` requires a zero-argument exported `frame()`.
 
-## Native ABI v1
+## Experimental Native Imports
 
 Native command/server projects retain the existing WASI, `term.*`, `net.*`,
 and manifest-declared library/bridge contracts. Their authoritative details are
 in `docs/19-harness.md`, `docs/21-terminal.md`, and module manifests. When a
 native import is added, add its exact signature and safety contract here too.
 
-## Capability change checklist
+## Change Checklist
 
-1. Confirm that a project-owned WASM provider cannot solve the requirement.
-2. Define the minimal target-specific built-in import and memory/error contract here.
-3. Implement it in the trusted host using an established library where one
-   exists; the adapter should stay small.
-4. Add a WAT proof project and automated/executable verification.
-5. Update generated `AGENTS.md` target guidance and release notes.
-6. Keep old v1 behavior intact; version a breaking redesign instead.
+1. Prefer a WIT-described project-owned provider over a new host API.
+2. Replace an inadequate experimental shape directly; do not preserve it by
+   default.
+3. Implement a built-in host effect only when it cannot live in a provider.
+4. Add a WAT/component proof and executable verification.
+5. Update the architecture and generated-project documentation in the same
+   change.

@@ -16,10 +16,10 @@ and use it. AI writes the IR (`.wat`); the harness runs it.
 - **Keep the harness generic.** New app needs go in the manifest, never in
   `host-rs` code. New ABI shapes (syscalls, bridge arities) extend the host
   once so all apps benefit.
-- **Treat the ABI as a public contract.** Read and update `docs/22-abi.md`
-  with every host capability change. An ABI addition requires implementation,
-  strict validation, documentation, and executable coverage; no arbitrary
-  imports or host-language escape hatches.
+- **Builder phase: redesign freely.** Read and update `docs/22-abi.md` with
+  every host capability change. Current Core ABI and GUI/browser imports are
+  experimental; replace them directly when WIT/Component Model composition is
+  better. Do not add compatibility layers without a real consumer.
 - **Generated = ignored.** Track sources (`.wat`, `.rs`, `.toml`, `.md`);
   never commit `target/`, `*.o`, or lib `*.wasm`. Exception:
   `examples/**/*.wasm` are tracked as runnable distributables.

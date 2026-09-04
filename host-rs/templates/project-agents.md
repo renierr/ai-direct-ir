@@ -43,6 +43,6 @@ __TARGET_AGENT_CONTRACT__
 Prefer the smallest application-local change. Do not change the harness merely
 because this app needs a library: declare a WASM provider in `host.toml` and
 import its exports. Built-in host capabilities need an explicit ABI,
-implementation, validation, and documentation. ABI additions are
-backward-compatible only: never change an existing built-in import's signature,
-memory contract, or behavior in place.
+implementation, validation, and documentation. The current ABI is experimental:
+redesign an inadequate built-in import directly rather than adding compatibility
+layers, unless this project has a concrete released dependency on it.
