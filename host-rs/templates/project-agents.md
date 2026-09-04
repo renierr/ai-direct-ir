@@ -10,8 +10,8 @@ links + runs configured WASM modules — see the harness repo,
   consent.** Missing tool? Stop and ask.
 - **Verify by execution.** Every claim ends in a run: `wat2wasm` must
   assemble, `host-rs check` must pass, CLI output must match.
-- **Keep the harness generic.** New app needs go in the manifest
-  (`__APPNAME__.toml`), never in harness code. If a genuinely new shape
+- **Keep the harness generic.** New app needs go in `host.toml`, never in
+  harness code. If a genuinely new shape
   is needed (a syscall, a bridge arity), it gets built into the host
   once so all apps benefit.
 - **Generated = ignored.** Track sources (`.wat`, `.toml`, `.md`);
@@ -21,15 +21,15 @@ links + runs configured WASM modules — see the harness repo,
 ## Layout
 
 - `__APPNAME__.wat` — the app (memory map in the file header comment)
-- `__APPNAME__.toml` — manifest: mode, libs/bridges, entry func
+- `host.toml` — manifest: mode, libs/bridges, entry func
 - `__APPNAME__.wasm` — assembled artifact (rebuild after every edit)
 
 ## Build / run
 
 ```bash
 wat2wasm __APPNAME__.wat -o __APPNAME__.wasm
-host-rs check __APPNAME__.toml   # link + verify, do NOT execute
-host-rs __APPNAME__.toml         # run (shorthand for `run`)
+host-rs check                    # link + verify host.toml, do NOT execute
+host-rs                          # run host.toml
 host-rs inspect __APPNAME__.wasm # what it needs and offers
 ```
 

@@ -12,19 +12,20 @@ pub fn print_help() {
         "host-rs {} — link + host configured WASM apps (see docs/19-harness.md)
 
 USAGE:
-  host-rs <command> [args]      run from the repo root (paths are relative)
+  host-rs [command] [args]      run from a project directory or use paths
 
 COMMANDS:
-  run <manifest.toml>           link modules and execute (server or command)
+  (no arguments)                run ./host.toml
+  run [manifest.toml]           link modules and execute; defaults to host.toml
   <manifest.toml>               shorthand for `run`
-  check <manifest.toml>         link everything, verify wiring, do NOT execute
+  check [manifest.toml]         link everything, verify wiring; defaults to host.toml
   inspect <module.wasm>         show imports/exports: what a (foreign) lib
                                 needs and offers — start here for other
                                 languages' .wasm output
-  init <app.wasm>               scaffold a <app>.toml stub from the app's
-                                 own imports (never overwrites)
+  init <app.wasm>               scaffold a host.toml stub beside the app from its
+                                  own imports (never overwrites)
   new <name>                    scaffold a project dir: <name>.wat +
-                                 <name>.toml + README.md + AGENTS.md
+                                  host.toml + README.md + AGENTS.md
                                  (never overwrites)
   help, -h, --help              this text
   version, -V, --version        version
@@ -32,6 +33,7 @@ COMMANDS:
 EXAMPLES:
   host-rs run examples/server/manifest.toml
   host-rs check examples/server/manifest.toml
+  cd myapp && host-rs
   host-rs inspect libs/sha256/sha256.wasm
   host-rs init myapp.wasm
   host-rs new myapp",
@@ -268,7 +270,7 @@ fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()
     Ok(())
 }
 
-/// Scaffold a full project dir: starter .wat + manifest + README + AGENTS.
+/// Scaffold a full project dir: starter .wat + host.toml + README + AGENTS.
 /// Templates are baked into the binary (include_str!), so a fresh project
 /// carries harness instructions and rules with it. Never overwrites.
 pub fn cmd_new(name: &str) -> Result<()> {
@@ -291,7 +293,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let wat = dir.join(format!("{name}.wat"));
-    let toml = dir.join(format!("{name}.toml"));
+    let toml = dir.join("host.toml");
     let readme = dir.join("README.md");
     let agents = dir.join("AGENTS.md");
     for p in [&wat, &toml, &readme, &agents] {
@@ -303,8 +305,8 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let starter = format!(
         ";; {name}.wat — {name} app, hosted by host-rs.\n\
          ;; Build: wat2wasm {name}.wat -o {name}.wasm\n\
-         ;; Check: host-rs check {name}.toml\n\
-         ;; Run:   host-rs {name}.toml\n\
+         ;; Check: host-rs check\n\
+         ;; Run:   host-rs\n\
          ;;\n\
          ;; Command-mode contract: own memory (export it for WASI),\n\
          ;; WASI stdio, `_start` entry, `proc_exit` code is the exit code.\n\
@@ -339,7 +341,7 @@ pub fn cmd_new(name: &str) -> Result<()> {
     let manifest = format!(
         "# {name}: command-mode app. Build the .wasm first:\n\
          #   wat2wasm {name}.wat -o {name}.wasm\n\
-         # then: host-rs check {name}.toml && host-rs {name}.toml\n\
+         # then: host-rs check && host-rs\n\
          mode = \"command\"\n\
          \n\
          [app]\n\
@@ -357,8 +359,8 @@ pub fn cmd_new(name: &str) -> Result<()> {
         include_str!("../templates/project-agents.md").replace("__APPNAME__", name),
     )?;
     println!(
-        "created {name}/:\n  {name}.wat\n  {name}.toml\n  README.md\n  AGENTS.md\n\
-         next:\n  cd {name} && wat2wasm {name}.wat -o {name}.wasm && host-rs check {name}.toml"
+        "created {name}/:\n  {name}.wat\n  host.toml\n  README.md\n  AGENTS.md\n\
+         next:\n  cd {name} && wat2wasm {name}.wat -o {name}.wasm && host-rs check"
     );
     Ok(())
 }
@@ -412,7 +414,7 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
     out.push_str(&format!(
         "[app]\npath = \"{pref}{stem}.wasm\"\nrun = \"{run}\"\n"
     ));
-    let toml_path = format!("{pref}{stem}.toml");
+    let toml_path = format!("{pref}host.toml");
     // Never silently overwrite an existing manifest.
     if std::path::Path::new(&toml_path).exists() {
         return Err(wasmtime::Error::msg(format!(

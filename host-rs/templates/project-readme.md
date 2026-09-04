@@ -12,13 +12,13 @@ Prerequisites: `host-rs` and `wat2wasm` must be on `PATH`.
 
 ```bash
 wat2wasm __APPNAME__.wat -o __APPNAME__.wasm
-host-rs check __APPNAME__.toml
-host-rs __APPNAME__.toml
+host-rs check
+host-rs
 ```
 
 `check` loads and links every configured module but does not execute it. Run
-it after every WAT or manifest change. Passing `__APPNAME__.toml` directly is
-shorthand for `host-rs run __APPNAME__.toml`.
+it after every WAT or manifest change. Inside this directory, `host-rs` runs
+`host.toml` automatically. `host-rs run` and `host-rs check` use it too.
 
 ## Project Files
 
@@ -26,7 +26,7 @@ shorthand for `host-rs run __APPNAME__.toml`.
 |---|---|
 | `__APPNAME__.wat` | App source: AI-generated, human-reviewable WASM IR. |
 | `__APPNAME__.wasm` | Assembled app artifact. Rebuild it after changing WAT. |
-| `__APPNAME__.toml` | Manifest: app mode, module paths, libraries, bridges, entry function. |
+| `host.toml` | Manifest: app mode, module paths, libraries, bridges, entry function. |
 | `AGENTS.md` | Rules and workflow for agents modifying this app. |
 
 ## Harness Model

@@ -16,8 +16,12 @@ fn usage_err(what: &str, usage: &str) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let engine = Engine::default();
-    // No args: explain the tool. Never boot a demo unasked.
+    // A project carries one conventional manifest, so bare commands work
+    // from its directory without repeating a path.
     if args.is_empty() {
+        if std::path::Path::new("host.toml").is_file() {
+            return cmds::run_manifest(&engine, "host.toml");
+        }
         cmds::print_help();
         return Ok(());
     }
@@ -38,10 +42,8 @@ fn main() -> Result<()> {
             cmds::cmd_inspect(&engine, arg1)
         }
         "check" => {
-            if arg1.is_empty() {
-                return usage_err("missing manifest", "host-rs check <manifest.toml>");
-            }
-            cmds::cmd_check(&engine, arg1, &manifest::load(arg1)?)
+            let path = if arg1.is_empty() { "host.toml" } else { arg1 };
+            cmds::cmd_check(&engine, path, &manifest::load(path)?)
         }
         "init" => {
             if arg1.is_empty() {
@@ -56,10 +58,7 @@ fn main() -> Result<()> {
             cmds::cmd_new(arg1)
         }
         "run" => {
-            if arg1.is_empty() {
-                return usage_err("missing manifest", "host-rs run <manifest.toml>");
-            }
-            cmds::run_manifest(&engine, arg1)
+            cmds::run_manifest(&engine, if arg1.is_empty() { "host.toml" } else { arg1 })
         }
         other => {
             // Shorthand: a .toml path means `run`.

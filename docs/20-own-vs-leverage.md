@@ -50,7 +50,7 @@ Clack.
 ## Scaffold a new app
 
 `host-rs new <name>` creates an empty safe project directory containing
-`<name>.wat`, `<name>.toml`, and `AGENTS.md`. The agents template is compiled
+`<name>.wat`, `host.toml`, `README.md`, and `AGENTS.md`. The templates are compiled
 into the harness with `include_str!`, so the project remains self-explanatory
 when copied outside this repository. The command accepts `[A-Za-z0-9_-]` names
 and refuses non-empty or partially existing targets.
