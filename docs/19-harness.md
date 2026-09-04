@@ -42,6 +42,14 @@ after `build` and `check`, use `host-rs serve` to serve its directory on
 localhost with the required WASM MIME type. `host-rs run` only executes native
 apps.
 
+The generated `README.md` and `AGENTS.md` are application documentation, not
+copies of this harness manual. `new` renders them for the selected target:
+native projects describe native command/server and terminal rules; browser
+projects describe the Canvas lifecycle, `web-host.js`, and browser-only ABI
+rules. Both state that the scaffold is a minimal working example for an AI to
+change into the requested application. The other target's instructions are
+intentionally omitted.
+
 Ship shape per app: `host-rs` + the `.wasm` files + data dir. The binary is
 per-OS (25 MB release); the `.wasm` files are portable.
 

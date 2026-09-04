@@ -555,11 +555,19 @@ pub fn cmd_new(name: &str) -> Result<()> {
     std::fs::write(&toml, manifest)?;
     std::fs::write(
         &readme,
-        include_str!("../templates/project-readme.md").replace("__APPNAME__", name),
+        project_doc(
+            include_str!("../templates/project-readme.md"),
+            name,
+            &target,
+        ),
     )?;
     std::fs::write(
         &agents,
-        include_str!("../templates/project-agents.md").replace("__APPNAME__", name),
+        project_doc(
+            include_str!("../templates/project-agents.md"),
+            name,
+            &target,
+        ),
     )?;
     if target == Target::Browser {
         std::fs::write(&index, include_str!("../templates/browser-index.html"))?;
@@ -583,6 +591,43 @@ pub fn cmd_new(name: &str) -> Result<()> {
         }
     );
     Ok(())
+}
+
+/// Render one application-focused document for the selected target; generated
+/// projects should not carry irrelevant instructions for the other runtime.
+fn project_doc(template: &str, name: &str, target: &Target) -> String {
+    let (target_name, run_command, workflow, files, contract, verify, agent_contract) = if *target
+        == Target::Browser
+    {
+        (
+            "browser",
+            "host-rs serve",
+            "`host-rs serve` hosts this directory at a localhost URL with the required\nWASM MIME type. Open that URL in a browser. `host-rs run` is not used for\nbrowser projects.",
+            "| `index.html` | The page containing the application canvas. |\n| `web-host.js` | Trusted browser runtime that implements the `web.*` imports. |",
+            "The module exports `start()` (the `[app].run` entry). It may import only the\ndeclared `web.*` functions implemented in `web-host.js`: Canvas dimensions,\n`clear`, `fill_rect`, keyboard state, pointer coordinates, and frame scheduling.\nIf it imports `request_frame()`, it must export `frame()`. `web-host.js` owns\nbrowser events and drawing effects; WAT owns application state and behavior.",
+            "Use `host-rs serve` and test the result in a browser",
+            "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `net.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
+        )
+    } else {
+        (
+            "native",
+            "host-rs run",
+            "`host-rs run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime.",
+            "",
+            "Command applications normally export `_start()` and can use declared WASI\nstdio/files and optional `term.*` terminal calls. Server applications use\n`mode = \"server\"` and an entry such as `run(port)` or `handle(cfd)` with\n`workers = N`. Only imports implemented by the native host and configured in\n`host.toml` are available.",
+            "Run `host-rs run` and exercise the expected CLI or server behavior",
+            "- `mode = \"command\"`: keep a plain stdio path; use `term.*` only after\n  checking `term.available` so pipes and CI still work.\n- `mode = \"server\"`: document socket and buffer ownership. Use `workers = N`\n  only when the entry handles one accepted connection.\n- Browser `web.*` imports, `index.html`, and `web-host.js` do not exist for this\n  target. A browser UI is a separate browser project.",
+        )
+    };
+    template
+        .replace("__APPNAME__", name)
+        .replace("__TARGET_NAME__", target_name)
+        .replace("__RUN_COMMAND__", run_command)
+        .replace("__TARGET_WORKFLOW__", workflow)
+        .replace("__TARGET_FILES__", files)
+        .replace("__TARGET_CONTRACT__", contract)
+        .replace("__VERIFY_ACTION__", verify)
+        .replace("__TARGET_AGENT_CONTRACT__", agent_contract)
 }
 
 fn prompt_target() -> Result<Target> {
