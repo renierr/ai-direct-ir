@@ -23,7 +23,7 @@ cc -O2 -Igen -I. gen/pi.c wasi_shim.c main_pi.c \
   wasm-rt-impl.c wasm-rt-mem-impl.c -o pi-native
 ```
 
-(`wasm-rt-*.c` come with every `wabt` install.) This is the most robust "source distribution": no toolchain of ours required on their side. Pre-generate `gen/` before zipping (it's already in the repo).
+(`wasm-rt-*.c` come with every `wabt` install.) This is the most robust "source distribution": no toolchain of ours required on their side. Regenerate `gen/` with `native/build.sh` before zipping (it's git-ignored as a build artifact).
 
 ## Option 3 — Send prebuilt exes (nicest UX, per-OS work)
 

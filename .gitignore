@@ -1,4 +1,5 @@
 # Build outputs — reproducible via wat2wasm / native/build.sh
+native/gen/
 native/*-native
 *.o
 *.cwasm
