@@ -246,6 +246,7 @@ fn repository_examples_check() {
         "examples/server/mt.toml",
         "examples/prompts-raw/host.toml",
         "examples/gui-hello/host.toml",
+        "examples/provider-demo/host.toml",
     ];
     for manifest in manifests {
         let out = run(&repo, &["check", manifest]);
@@ -306,6 +307,39 @@ fn pi_example_prints_the_requested_digits() {
         stdout(&out).contains("3.14159265358979323846"),
         "unexpected pi output: {}",
         stdout(&out)
+    );
+}
+
+#[test]
+fn provider_example_calls_across_the_component_boundary() {
+    let _shared = examples_lock();
+    // The string crosses consumer -> host -> provider -> host -> consumer, all
+    // wired at link time with no build-time composition tool.
+    let out = run(&repo(), &["run", "examples/provider-demo/host.toml"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "HELLO FROM A PROVIDER\n");
+}
+
+#[test]
+fn a_core_module_is_rejected_as_a_provider() {
+    let project = scaffold_target("provider-core-module", "component");
+    // A Core module where the manifest declares a component provider.
+    std::fs::write(
+        project.join("provider.wat"),
+        "(module (func (export \"noop\")))\n",
+    )
+    .expect("write provider source");
+    let manifest = project.join("host.toml");
+    let mut text = std::fs::read_to_string(&manifest).expect("read manifest");
+    text.push_str("\n[[providers]]\nsource = \"provider.wat\"\npath = \"provider.wasm\"\n");
+    std::fs::write(&manifest, text).expect("write manifest");
+
+    let out = run(&project, &["build"]);
+    assert!(!out.status.success(), "a Core provider must be rejected");
+    assert!(
+        stderr(&out).contains("Core WASM module"),
+        "{}",
+        stderr(&out)
     );
 }
 
@@ -447,6 +481,32 @@ fn component_scaffold_builds_checks_and_runs() {
 }
 
 #[test]
+fn the_target_is_inferred_when_the_manifest_omits_it() {
+    let project = scaffold_target("target-inference", "component");
+    let manifest = project.join("host.toml");
+    let declared = std::fs::read_to_string(&manifest).expect("read manifest");
+    let without_target: String = declared
+        .lines()
+        .filter(|line| !line.starts_with("target"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(!without_target.contains("target"));
+    std::fs::write(&manifest, without_target).expect("write manifest");
+
+    // The artifact's own preamble says it is a component; nothing else has to.
+    let checked = run(&project, &["check"]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    assert!(
+        stdout(&checked).contains("wasi:cli/run@"),
+        "{}",
+        stdout(&checked)
+    );
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran), "hello from app\n");
+}
+
+#[test]
 fn component_artifact_is_a_component_not_a_core_module() {
     let project = scaffold_target("component-artifact", "component");
     assert!(run(&project, &["build"]).status.success());
@@ -484,4 +544,60 @@ fn component_distribution_bundles_the_host() {
     }
     let manifest = std::fs::read_to_string(dist.join("host.toml")).expect("read dist manifest");
     assert!(manifest.contains("component"), "{manifest}");
+}
+
+#[test]
+fn a_component_can_import_the_projects_own_interface() {
+    let project = scaffold_target("component-term", "component");
+    // `ai-direct:host/term` is not WASI. A component imports a project-owned
+    // interface exactly as it imports `wasi:io/streams`.
+    let starter = std::fs::read_to_string(project.join("app.wat")).expect("read starter");
+    let boundary = starter
+        .split(";; --- application logic")
+        .next()
+        .expect("starter has an application section");
+    std::fs::write(
+        project.join("app.wat"),
+        format!(
+            r#"{boundary}
+  (import "ai-direct:host/term" (instance $term
+    (export "available" (func (result s32)))))
+  (alias export $term "available" (func $available))
+  (core func $available-l (canon lower (func $available)))
+  (core instance $t (export "available" (func $available-l)))
+
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    (import "term" "available" (func $available (result i32)))
+    (data $no (i32.const 0x100) "terminal: no\n")
+    (data $yes (i32.const 0x120) "terminal: yes\n")
+    (func (export "run") (result i32)
+      (if (call $available)
+        (then (call $write (call $get_stdout)
+                (global.get $yes.ptr) (global.get $yes.len) (i32.const 0x200)))
+        (else (call $write (call $get_stdout)
+                (global.get $no.ptr) (global.get $no.len) (i32.const 0x200))))
+      (i32.load (i32.const 0x200))))
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))
+    (with "term" (instance $t))))
+
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
+)
+"#
+        ),
+    )
+    .expect("write app");
+
+    let checked = run(&project, &["check"]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    // Tests do not run on a terminal, so the honest answer is "no".
+    assert_eq!(stdout(&ran), "terminal: no\n");
 }
