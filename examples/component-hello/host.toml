@@ -1,0 +1,9 @@
+# WASI 0.2 command component, authored as component WAT and assembled by
+# host-rs in-process. No bindings generator and no language toolchain.
+target = "component"
+mode = "command"
+
+[app]
+source = "component-hello.wat"
+path = "component-hello.wasm"
+run = "wasi:cli/run"
