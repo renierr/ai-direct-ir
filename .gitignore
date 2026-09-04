@@ -1,0 +1,8 @@
+# Build outputs — reproducible via wat2wasm / native/build.sh
+native/*-native
+*.o
+*.cwasm
+
+# Editor / OS noise
+.DS_Store
+*~

@@ -1,0 +1,21 @@
+[Unit]
+Description=pi-wasm (wasmtime + precompiled module)
+After=network.target
+
+[Service]
+Type=simple
+User=wasmapp
+Group=wasmapp
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Only what the module needs: stdin/stdout, no fs, no network.
+ExecStart=/usr/local/bin/wasmtime run --allow-precompiled /opt/pi-wasm/pi.cwasm
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
