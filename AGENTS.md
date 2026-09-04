@@ -78,5 +78,7 @@ Start with `host-rs inspect <file>`.
   0x1000) "...")` — and read `$msg.ptr` / `$msg.len`, which host-rs derives.
   Named segments need a literal offset and may not overlap.
 - Manifest per app, next to its modules; `host-rs init` scaffolds it.
-- Commit messages: short imperative summary. Push when asked or when a
-  unit of work completes.
+- Commit messages: short imperative summary.
+- **Never commit or push without an explicit request.** Finishing a unit of
+  work is not a request. Leave changes in the working tree, report what
+  changed, and let the user decide when it lands.

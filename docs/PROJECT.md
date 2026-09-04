@@ -299,4 +299,5 @@ being specification-only before more specification is written.
   active consumer or explicit release commitment.
 - Before claiming completion, run the relevant build, `host-rs check`, target
   behavior check, and distribution check when packaging changes.
-- Do not commit or push unless explicitly requested.
+- Never commit or push without an explicit request. Finishing a unit of work is
+  not a request. This repeats `AGENTS.md` deliberately: the two must agree.

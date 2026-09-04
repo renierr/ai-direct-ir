@@ -71,3 +71,9 @@ import its exports. Built-in host capabilities need an explicit ABI,
 implementation, validation, and documentation. The current ABI is experimental:
 redesign an inadequate built-in import directly rather than adding compatibility
 layers, unless this project has a concrete released dependency on it.
+
+## Version Control
+
+Never commit or push without an explicit request. Finishing a unit of work is
+not a request. Leave changes in the working tree, report what changed, and let
+the user decide when it lands.
