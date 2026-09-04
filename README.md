@@ -32,11 +32,11 @@ and runs native or browser WASM projects:
 
 ```bash
 ./build.sh
-./host-rs/target/release/host-rs --help
+./dist/host-rs --help
 ```
 
-`build.sh` runs Cargo against `host-rs/Cargo.toml` and writes the local release
-binary to `host-rs/target/release/host-rs`. It also supports configured Rust
+`build.sh` runs Cargo against `host-rs/Cargo.toml` and copies the local release
+binary to `dist/host-rs`. It also supports configured Rust
 cross-targets such as `./build.sh --target x86_64-pc-windows-gnu`; that requires
 the target and its linker to be installed separately.
 

@@ -5,6 +5,7 @@
 native/gen/
 native/*-native
 host-rs/target/
+dist/
 libs/**/target/
 libs/**/Cargo.lock
 *.o

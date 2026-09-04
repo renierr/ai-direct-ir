@@ -13,8 +13,8 @@ usage() {
     '  ./build.sh --target x86_64-pc-windows-gnu' \
     '' \
     'Artifacts:' \
-    '  host-rs/target/release/host-rs' \
-    '  host-rs/target/<triple>/release/host-rs[.exe]' \
+    '  dist/host-rs' \
+    '  dist/<triple>/host-rs[.exe]' \
     '' \
     'Cross-compilation requires that the requested Rust target and its native linker' \
     'are already installed. This script never installs them. For Windows GNU builds' \
@@ -45,14 +45,22 @@ case "${1:-}" in
     ;;
 esac
 
+mkdir -p dist
 if [[ -n "$target" ]]; then
   if ! rustup target list --installed | command grep -Fxq "$target"; then
     printf 'Rust target %q is not installed. Install it explicitly, then rerun this command.\n' "$target" >&2
     exit 1
   fi
   cargo build --manifest-path host-rs/Cargo.toml --release --target "$target"
-  printf 'built host-rs/target/%s/release/host-rs\n' "$target"
+  mkdir -p "dist/$target"
+  executable="host-rs"
+  if [[ "$target" == *windows* ]]; then
+    executable="host-rs.exe"
+  fi
+  cp "host-rs/target/$target/release/$executable" "dist/$target/$executable"
+  printf 'built dist/%s/%s\n' "$target" "$executable"
 else
   cargo build --manifest-path host-rs/Cargo.toml --release
-  printf 'built host-rs/target/release/host-rs\n'
+  cp host-rs/target/release/host-rs dist/host-rs
+  printf 'built dist/host-rs\n'
 fi

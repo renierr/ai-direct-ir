@@ -28,7 +28,7 @@ building a Windows GNU executable on Linux requires the already-installed
 ./build.sh --target x86_64-pc-windows-gnu
 ```
 
-The artifact is `host-rs/target/x86_64-pc-windows-gnu/release/host-rs.exe`. Windows
+The artifact is `dist/x86_64-pc-windows-gnu/host-rs.exe`. Windows
 MSVC builds normally require Microsoft's toolchain on Windows.
 
 For a scaffolded project, `host.toml` declares `[app].source` and `[app].path`.
