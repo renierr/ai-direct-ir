@@ -29,17 +29,23 @@ pub const KEY_TAB: i32 = 0x109;
 pub const KEY_CTRL_C: i32 = 0x003;
 
 /// Restore a terminal changed by the guest. Safe to call more than once.
-pub fn restore(host: &mut Host) {
-    if !host.term_active {
+/// Takes the flag rather than a host so the Core and component hosts, which
+/// are different types, can share one implementation.
+pub fn restore_flag(active: &mut bool) {
+    if !*active {
         return;
     }
     let _ = execute!(stdout(), Show, LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
-    host.term_active = false;
+    *active = false;
 }
 
-pub fn w_enter(mut caller: Caller<'_, Host>) -> i32 {
-    if caller.data().term_active {
+pub fn restore(host: &mut Host) {
+    restore_flag(&mut host.term_active);
+}
+
+pub fn enter(active: &mut bool) -> i32 {
+    if *active {
         return 0;
     }
     if terminal::enable_raw_mode().is_err() {
@@ -49,46 +55,74 @@ pub fn w_enter(mut caller: Caller<'_, Host>) -> i32 {
         let _ = terminal::disable_raw_mode();
         return -1;
     }
-    caller.data_mut().term_active = true;
+    *active = true;
     0
+}
+
+pub fn w_enter(mut caller: Caller<'_, Host>) -> i32 {
+    enter(&mut caller.data_mut().term_active)
 }
 
 /// 1 only when both streams are real terminals. Guests use this to retain a
 /// scriptable fallback for pipes, redirected files, and CI.
-pub fn w_available(_caller: Caller<'_, Host>) -> i32 {
+pub fn available() -> i32 {
     i32::from(stdin().is_terminal() && stdout().is_terminal())
 }
 
-pub fn w_exit(mut caller: Caller<'_, Host>) -> i32 {
-    restore(caller.data_mut());
+pub fn w_available(_caller: Caller<'_, Host>) -> i32 {
+    available()
+}
+
+pub fn exit(active: &mut bool) -> i32 {
+    restore_flag(active);
     0
 }
 
-pub fn w_clear(caller: Caller<'_, Host>) -> i32 {
-    if !caller.data().term_active {
+pub fn w_exit(mut caller: Caller<'_, Host>) -> i32 {
+    exit(&mut caller.data_mut().term_active)
+}
+
+pub fn clear(active: bool) -> i32 {
+    if !active {
         return -1;
     }
     execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All)).map_or(-1, |_| 0)
 }
 
-pub fn w_move_to(caller: Caller<'_, Host>, x: i32, y: i32) -> i32 {
-    if !caller.data().term_active || x < 0 || y < 0 || x > u16::MAX as i32 || y > u16::MAX as i32 {
+pub fn w_clear(caller: Caller<'_, Host>) -> i32 {
+    clear(caller.data().term_active)
+}
+
+pub fn move_to(active: bool, x: i32, y: i32) -> i32 {
+    if !active || x < 0 || y < 0 || x > u16::MAX as i32 || y > u16::MAX as i32 {
         return -1;
     }
     execute!(stdout(), MoveTo(x as u16, y as u16)).map_or(-1, |_| 0)
 }
 
+pub fn w_move_to(caller: Caller<'_, Host>, x: i32, y: i32) -> i32 {
+    move_to(caller.data().term_active, x, y)
+}
+
 /// Packed terminal size: columns in high 16 bits, rows in low 16 bits; -1 error.
-pub fn w_size(_caller: Caller<'_, Host>) -> i32 {
+pub fn size() -> i32 {
     terminal::size().map_or(-1, |(cols, rows)| ((cols as i32) << 16) | rows as i32)
 }
 
-pub fn w_flush(_caller: Caller<'_, Host>) -> i32 {
+pub fn w_size(_caller: Caller<'_, Host>) -> i32 {
+    size()
+}
+
+pub fn flush() -> i32 {
     stdout().flush().map_or(-1, |_| 0)
 }
 
-pub fn w_read_key(caller: Caller<'_, Host>) -> Result<i32> {
-    if !caller.data().term_active {
+pub fn w_flush(_caller: Caller<'_, Host>) -> i32 {
+    flush()
+}
+
+pub fn read_key(active: bool) -> Result<i32> {
+    if !active {
         return Ok(-1);
     }
     loop {
@@ -115,4 +149,8 @@ pub fn w_read_key(caller: Caller<'_, Host>) -> Result<i32> {
         };
         return Ok(code);
     }
+}
+
+pub fn w_read_key(caller: Caller<'_, Host>) -> Result<i32> {
+    read_key(caller.data().term_active)
 }
