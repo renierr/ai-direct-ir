@@ -46,14 +46,15 @@ and our custom `net.*` ABI disappears).
 - Assumes the single preopened dir lands on WASI fd 3 (true for one
   preopen; breaks if you add more — then pass the fd in).
 
-## Run it (no Python)
+## Run it (no Python — via the generic harness, `docs/19-harness.md`)
 
 ```bash
 wat2wasm lib/http.wat -o lib/http.wasm
 wat2wasm srv/server.wat -o srv/server.wasm
-cargo build --release --target wasm32-wasip1 -p lib-sha256  # needs target, one-time
+cargo build --release --target wasm32-wasip1   # from lib-sha256/
 cp lib-sha256/target/wasm32-wasip1/release/sha256.wasm lib/
-cargo run --release -p host-rs -- 8124
+cargo build --release                          # from host-rs/ (once)
+./host-rs/target/release/host-rs srv/manifest.toml
 ```
 
 ## Verified behavior (curl matrix, 2026-09-04, Rust host)

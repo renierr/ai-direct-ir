@@ -2,6 +2,11 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Generic harness: manifest-driven host-rs runs everything
+- Rewrote host-rs around TOML manifests (mode/libs/bridges/app); verified same binary runs server (`srv/manifest.toml`, full matrix incl. sha256), pi and hello (`src/*.toml`, exit codes via I32Exit) with zero rebuilds. Lib exports auto-wired from module metadata; shared memory sized from import minima.
+- Fixes: `MemoryType::new` takes u32 pages; manifest `memory_pages` is a floor, not the size.
+- Learning: harness = load + link + syscalls; everything app-specific lives in the manifest. New ABI shapes (UDP, other bridge arities) extend the host once.
+
 ## 2026-09-04 — Python-free: Rust host + crates.io sha2 lib (POST /sha256)
 - `rustup target add wasm32-wasip1` (user-approved). `host-rs/` on wasmtime 48 (`p1::add_to_linker_sync`, `build_p1`) replaces `serve.py` — full curl matrix green, zero Python at runtime.
 - `lib-sha256/` (sha2 0.10, cdylib) bridged via host memcpy (Rust std keeps own memory); `POST /sha256` matches `sha256sum` on `abc` and a 5 KB blob. lib `parse_request` now returns paths for non-GET too.

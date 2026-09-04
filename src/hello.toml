@@ -1,0 +1,6 @@
+# Hello CLI. Run from repo root: host-rs src/hello.toml
+mode = "command"
+
+[app]
+path = "src/hello.wasm"
+run = "_start"
