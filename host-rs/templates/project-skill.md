@@ -15,9 +15,13 @@ provider, or its WIT/Component Model integration.
 - `host-rs check`, target run, and `host-rs dist` rebuild a declared root WAT
   source when it or an included fragment is newer than the generated WASM.
   `host-rs build` forces a rebuild.
-- `wasm-tools` is a build-time prerequisite only for Component Model work. Use
-  `validate`, `component wit`, `component targets`, and `compose`; do not place
-  it in an application distribution or invoke it at runtime.
+- `host-rs build` assembles, validates, and compiles before writing. A failed
+  build leaves the previous artifact in place; errors name the fragment file and
+  line you wrote, not the expanded text.
+- `wasm-tools` is an optional cross-check, never required to build an app. Use
+  `validate`, `component wit`, and `component targets`; do not place it in an
+  application distribution or invoke it at runtime. `wasm-tools compose` is
+  deprecated upstream — composition of prebuilt components is an open decision.
 - Never install, upgrade, or remove tooling without explicit user consent.
 
 ## Core WAT
@@ -41,9 +45,10 @@ provider, or its WIT/Component Model integration.
   a source-file organization technique. Do not modify the harness merely
   because one application needs a library.
 - For WIT/Component Model work, define a small versioned WIT contract first;
-  validate it, verify the provider component against its declared world, then
-  compose explicit local artifacts. Core WAT cannot directly import a WIT
-  component without an explicit canonical-ABI/component boundary.
+  validate it, then verify the provider component against its declared world.
+  A WIT directory is one package, so each contract needs its own directory.
+  Core WAT cannot directly import a WIT component without an explicit
+  canonical-ABI/component boundary.
 - Record provider source/provenance, license, hash, contract, permissions, and
   conformance checks before consuming a released artifact.
 

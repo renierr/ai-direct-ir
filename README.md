@@ -45,20 +45,25 @@ toolchains merely to edit WAT and run `host-rs build`, `check`, `run`, or
 artifact or the artifact is missing. `host-rs build` remains the explicit
 force-rebuild command.
 
-The planned Component Model project path adds `wasm-tools 1.257.1` only to the
-build machine when `host-rs build` must compose a root component with locally
-vendored provider components. A prebuilt composed component needs only
-`host-rs` to check, run, or distribute.
+`host-rs build` assembles, validates, *and* compiles the module before writing
+the artifact, so a build never leaves a broken `.wasm` behind. Assembly and
+validation errors are reported against the fragment file and line the author
+wrote, not against the expanded text.
+
+A prebuilt component needs only `host-rs` to check, run, or distribute. How a
+root component gets composed with prebuilt provider components is still an open
+decision; see the `wasm-tools` boundary below.
 
 ### Changing The Harness
 
 Changing this repository requires Rust/Cargo compatible with edition 2024 and
-Git. Component Model changes additionally require `wasm-tools 1.257.1`. Build
-and verify with:
+Git. `wasm-tools 1.257.1` is an optional cross-check, not a build requirement.
+Build and verify with:
 
 ```bash
 cargo fmt --manifest-path host-rs/Cargo.toml
 cargo check --manifest-path host-rs/Cargo.toml
+cargo test --manifest-path host-rs/Cargo.toml
 ./build.sh
 ```
 
@@ -74,18 +79,31 @@ may be used or distributed with its required notices. We do not bundle it into
 `host-rs` or a shipped application: it is a platform-specific 16 MiB build tool
 and is unnecessary at runtime.
 
-The future component build path invokes only these external subcommands:
+The embedded `wat` parser already handles the Component Model text format, so
+`host-rs` can assemble a `(component ...)` source in-process with no external
+tool. Wasmtime 48 already carries the Component Model and WASI 0.2 through the
+existing dependency graph. Component *authoring* therefore needs nothing new.
+
+`wasm-tools` remains useful only for checks the harness does not implement:
 
 | Command | Harness use |
 |---|---|
-| `wasm-tools validate` | Reject an invalid Core WASM or Component artifact. |
+| `wasm-tools validate` | Cross-check a Core WASM or Component artifact. |
 | `wasm-tools component wit` | Parse and validate a provider's WIT package. |
 | `wasm-tools component targets` | Confirm that a component implements the declared WIT world. |
-| `wasm-tools compose` | Compose a root component with explicit project-local provider components into one distributable component. |
 
-`host-rs` will load and execute the completed component through Wasmtime and
-WASI 0.2. It will not fetch providers, invoke `wasm-tools` at runtime, or place
-the tool in `dist/`.
+**Composition is an open decision, deliberately deferred.** The component text
+format has no form for embedding a prebuilt `.wasm`, so wiring a root component
+to vendored provider *binaries* needs something more than the `wat` parser.
+`wasm-tools compose` still runs in 1.257.1 but announces `has been deprecated.
+Please use wac instead.`, so it is not a foundation to build on. The options are
+an external `wac` CLI, an in-process composition crate, or emitting the
+composition ourselves. None of them is worth adopting before a real provider
+exists to compose; the decision waits for that provider.
+
+`host-rs` will load and execute a completed component through Wasmtime and
+WASI 0.2. It will not fetch providers at runtime or place any build tool in
+`dist/`.
 
 ## Build The Harness
 
@@ -105,9 +123,10 @@ the target and its linker to be installed separately.
 ## Layout
 
 - `host-rs/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`net`/`link`/`cmds` modules)
-- `examples/{hello,pi,server}/` — runnable apps (WAT + tracked `.wasm` + manifest)
-- `libs/http/` — hand-written WAT lib; `libs/sha256/` — Rust crate wrapping crates.io `sha2`
-- `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/` — findings + lablog
+- `host-rs/tests/cli.rs` — end-to-end tests that run the real binary
+- `examples/{hello,pi,server,prompts,prompts-raw,gui-hello}/` — runnable apps; each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
+- `libs/http/` — hand-written WAT lib; `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
+- `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 
 Start with `docs/PROJECT.md`. It is the living project documentation
 shared with dependent sibling projects: it records shipped behavior, current

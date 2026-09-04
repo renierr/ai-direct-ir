@@ -24,9 +24,10 @@ generic design changes.
 
 - **Never install, upgrade, or remove software without explicit user consent.**
   Missing tool? Stop and ask. (`rustup target add …`, `pip install …`, etc.)
-- **Verify by execution.** Every claim ends in a run: `host-rs` must assemble,
-  `host-rs check` must pass, `curl`/CLI output must match.
-  Raw bytes over pretty output (`curl -i`; curl hides NULs).
+- **Verify by execution.** Every claim ends in a run: `cargo test` must pass,
+  `host-rs` must assemble, `host-rs check` must pass, `curl`/CLI output must
+  match. Raw bytes over pretty output (`curl -i`; curl hides NULs).
+  A behavior worth claiming is worth a test in `host-rs/tests/cli.rs`.
 - **Keep the harness generic.** New app needs go in the manifest, never in
   `host-rs` code. New ABI shapes (syscalls, bridge arities) extend the host
   once so all apps benefit.
@@ -45,16 +46,20 @@ generic design changes.
 ## Layout
 
 - `host-rs/src/` — `main.rs` (CLI) + `manifest`/`host`/`net`/`link`/`cmds`
-- `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `<name>.toml`
+- `host-rs/tests/cli.rs` — end-to-end tests that drive the real binary
+- `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `<name>.toml`;
+  every manifest declares `source`, so the artifact is rebuilt from the WAT
 - `examples/server/` — `server.wat`, `manifest.toml`, `www/` demo root
-- `libs/http/` — hand-written WAT lib; `libs/sha256/` — Rust crate (`sha2`)
-- `native/` and `tools/` — legacy experiments; `docs/` — current platform docs
+- `libs/http/` — hand-written WAT lib; `libs/sha256/` (`sha2`) and
+  `libs/text-width/` (`unicode-width`) — Rust crates
+- `native/` and `tools/` — legacy experiments; `docs/PROJECT.md` — living state
 
 ## Build / run (from repo root unless noted)
 
 ```bash
 cargo build --release --target wasm32-wasip1   # from libs/sha256/
 cp libs/sha256/target/wasm32-wasip1/release/sha256.wasm libs/sha256/
+cargo test --manifest-path host-rs/Cargo.toml
 ./build.sh
 ./dist/host-rs check examples/server/manifest.toml
 ./dist/host-rs examples/server/manifest.toml  # :8124
@@ -67,6 +72,8 @@ Start with `host-rs inspect <file>`.
 ## Conventions
 
 - WAT: memory map in the file header comment; lib address maps are ABI.
+- `;; @include <path>` splits a root WAT into fragments. Paths are relative to
+  the root source's directory at every depth, never absolute and never `..`.
 - Manifest per app, next to its modules; `host-rs init` scaffolds it.
 - Commit messages: short imperative summary. Push when asked or when a
   unit of work completes.
