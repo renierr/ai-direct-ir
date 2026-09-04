@@ -11,6 +11,9 @@ libs/**/Cargo.lock
 *.o
 *.cwasm
 
+# Local credentials and configuration.
+.env
+
 # Editor / OS noise
 .DS_Store
 *~
