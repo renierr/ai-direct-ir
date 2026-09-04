@@ -2,6 +2,11 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — Static file server in IR + lib-reuse proof (lib/ + srv/)
+- Built `lib/http.wat` (response helpers) + `srv/server.wat` (accept loop, routing, WASI file serving), linked at runtime through host-owned shared memory; `srv/serve.py` provides only TCP syscalls + linking (marked scaffolding; goal stays Python-free via C host or WASI 0.2 sockets).
+- Full curl matrix green: 200s with correct MIME, 404, 403×2 traversal, 405, query-strip. Bugs found: preview1 `path_open` needs out-pointer; wasmtime-py needs `access_caller=True` + `ValType`; hand-counted MIME length 25 vs 24 poisoned headers (curl hides NUL — verify raw with `curl -i`).
+- `lib/*.wasm`, `srv/*.wasm` git-ignored as build artifacts (only `src/*.wasm` stay tracked as distributables).
+
 ## 2026-09-04 — License pulled: GNU AGPLv3 (added via GitHub web)
 - `git pull --ff-only` → `f278fd6 Create LICENSE`, clean fast-forward.
 - Note: AGPL is strong copyleft + network clause — serving a modified app over HTTP counts as distribution. Fine for open work; revisit (MIT/Apache-2.0) if closed-source distribution is ever wanted.

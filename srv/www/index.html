@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>served from AI-direct IR</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<h1>hello from WASM IR</h1>
+<p>This page was served by <code>srv/server.wat</code> + <code>lib/http.wat</code>
+&mdash; HTTP parsing, routing, MIME sniffing and file I/O all run inside
+WebAssembly. The host only provides TCP syscalls and module linking.</p>
+<ul>
+<li><a href="/hello.txt">hello.txt</a></li>
+<li><a href="/data.json">data.json</a></li>
+<li><a href="/missing">a 404</a></li>
+</ul>
+</body>
+</html>
