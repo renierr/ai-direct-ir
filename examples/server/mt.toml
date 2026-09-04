@@ -27,5 +27,6 @@ out_len = 64
 max_in = 7000
 
 [app]
+source = "server.wat"
 path = "server.wasm"
 run = "handle"

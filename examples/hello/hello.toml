@@ -2,5 +2,6 @@
 mode = "command"
 
 [app]
+source = "hello.wat"
 path = "hello.wasm"
 run = "_start"

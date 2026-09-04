@@ -17,5 +17,6 @@ out_len = 4
 max_in = 128
 
 [app]
+source = "prompts-raw.wat"
 path = "prompts-raw.wasm"
 run = "_start"

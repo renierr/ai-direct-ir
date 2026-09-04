@@ -3,5 +3,6 @@
 mode = "command"
 
 [app]
+source = "prompts.wat"
 path = "prompts.wasm"
 run = "_start"
