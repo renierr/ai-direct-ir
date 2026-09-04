@@ -2,6 +2,11 @@
 
 Append newest first. Template per entry: Goal / Command / Output / Learning.
 
+## 2026-09-04 — `wasm-opt` test: -O3 shrinks 5%, speed change is noise — not adopted
+- `wasm-opt -O3 --enable-bulk-memory --enable-multivalue` (v130 defaults to MVP; our modules need both flags or validation fails) on `server.wasm` (2254→2115B) + `http.wasm` (1786→1714B). `-Oz` identical size (2114B). Semantics re-verified on the opt build (digest, 404, 403).
+- Bench single-mode, same script: GET 4727 vs 4679 rps, conc 6123 vs 5975, 404/POST rows moved ±few % both directions — all inside run-to-run variance. Expected: peephole/DCE can't touch syscall/segment-dominated cost.
+- Decision: restored byte-identical originals (hashes match), tracked `.wasm` stays direct `wat2wasm` output for 1:1 source traceability. Revisit only if size matters (embedded).
+
 ## 2026-09-04 — Real Python baseline (`python3 -m http.server :8125`): WASM wins 3× seq, 8× conc
 - Same `bench.py`: Python GET / seq avg 0.72 ms / 1359 rps vs WASM single 0.22 ms / 4320 rps. 8-thread: Python 707 rps (avg 4.31 ms, one 1040 ms stall) vs WASM 5644–5756 rps. POST row err=200 expected (Python answers 501, counted as err by the script).
 - Why: the real server parses requests in pure Python, stat/open/read/closes per request, all under the GIL (hence conc collapse). Our per-request path is JIT'd machine code, no GIL. The earlier "Python faster" finding was an artifact of the canned baseline skipping all real work.
