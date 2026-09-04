@@ -40,4 +40,9 @@ host-rs inspect __APPNAME__.wasm # what it needs and offers
 - Command mode: `_start` entry, WASI stdio, `proc_exit` code becomes
   the process exit code. Server mode: `run(port)` owns listen+accept,
   or export `handle(cfd)` and let `workers = N` parallelize.
+- Terminal UX: WASI stdio is line-oriented. Import `term.*` only for a
+  real terminal: check `term.available`, preserve a pipe/CI fallback,
+  and see the harness `docs/21-terminal.md` for raw mode, key events,
+  alternate screen, cursor, and size. The harness restores the terminal
+  after guest errors/traps.
 - Commit messages: short imperative summary.

@@ -24,7 +24,8 @@ COMMANDS:
   init <app.wasm>               scaffold a <app>.toml stub from the app's
                                  own imports (never overwrites)
   new <name>                    scaffold a project dir: <name>.wat +
-                                 <name>.toml + AGENTS.md (never overwrites)
+                                 <name>.toml + README.md + AGENTS.md
+                                 (never overwrites)
   help, -h, --help              this text
   version, -V, --version        version
 
@@ -267,9 +268,9 @@ fn run_workers(engine: &Engine, path: &str, base: &std::path::Path) -> Result<()
     Ok(())
 }
 
-/// Scaffold a full project dir: starter .wat + manifest + AGENTS.md.
-/// The AGENTS.md template is baked into the binary (include_str!) so a
-/// fresh project carries the harness rules with it. Never overwrites.
+/// Scaffold a full project dir: starter .wat + manifest + README + AGENTS.
+/// Templates are baked into the binary (include_str!), so a fresh project
+/// carries harness instructions and rules with it. Never overwrites.
 pub fn cmd_new(name: &str) -> Result<()> {
     if name.is_empty()
         || !name
@@ -291,8 +292,9 @@ pub fn cmd_new(name: &str) -> Result<()> {
     }
     let wat = dir.join(format!("{name}.wat"));
     let toml = dir.join(format!("{name}.toml"));
+    let readme = dir.join("README.md");
     let agents = dir.join("AGENTS.md");
-    for p in [&wat, &toml, &agents] {
+    for p in [&wat, &toml, &readme, &agents] {
         if p.exists() {
             return fail(format!("`{}` exists, refusing to overwrite", p.display()));
         }
@@ -347,11 +349,15 @@ pub fn cmd_new(name: &str) -> Result<()> {
     std::fs::write(&wat, starter)?;
     std::fs::write(&toml, manifest)?;
     std::fs::write(
+        &readme,
+        include_str!("../templates/project-readme.md").replace("__APPNAME__", name),
+    )?;
+    std::fs::write(
         &agents,
         include_str!("../templates/project-agents.md").replace("__APPNAME__", name),
     )?;
     println!(
-        "created {name}/:\n  {name}.wat\n  {name}.toml\n  AGENTS.md\n\
+        "created {name}/:\n  {name}.wat\n  {name}.toml\n  README.md\n  AGENTS.md\n\
          next:\n  cd {name} && wat2wasm {name}.wat -o {name}.wasm && host-rs check {name}.toml"
     );
     Ok(())
