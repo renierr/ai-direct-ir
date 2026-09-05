@@ -1,12 +1,22 @@
 # A real CLI: `air run examples/sha256sum/host.toml <file>`.
-# `root` is the directory the app may read, resolved relative to THIS file.
-# For a file elsewhere, grant it at the command line instead:
-#   air run --dir . <manifest> <file>      the directory you ran from
-#   air run --dir / <manifest> /abs/path   everything
-# or set `root = "/"` here.
+#
+# A component gets no ambient filesystem. It reads exactly what is granted
+# here or on the command line, and WASI has no global root, so an absolute
+# path resolves nowhere on its own.
+#
+# Manifest paths are PROJECT-relative -- resolved against this file, not
+# against the shell -- so a grant travels with the app through `air dist`.
+# `root = "../.."` is the repository, which is what makes
+# `air run examples/sha256sum/host.toml AGENTS.md` work from anywhere.
+#
+# For a directory outside the project, grant it from the shell instead, where
+# paths are relative to your working directory:
+#   air run --dir . <manifest> <file>       what you can see right now
+#   air run --dir / <manifest> /abs/path    everything
+#   air run --dir-rw <path> ...             writable
 mode = "command"
-root = "."
-guest = "/work"
+root = "../.."
+guest = "/repo"
 
 # The provider is vendored, not fetched. Its hash is recorded in
 # vendor/ai-direct-sha256-0.1.0/checksums.txt.

@@ -15,14 +15,19 @@ of:
 
 | | |
 |---|---|
+| `root = "../.."` in `host.toml` | this example's grant: the repository, so a repo-relative path just works |
 | `air run --dir . <manifest> <file>` | the directory you ran from |
 | `air run --dir / <manifest> /abs/path` | everything; absolute paths work as written |
-| `root = "/"` in `host.toml` | the same, fixed in the manifest |
+| `air run --dir-rw <path> ...` | granted for writing too |
 
-Without a grant the app names the file it could not open and prints those
-options, rather than failing with nothing to act on. The default `root = "."`
-resolves relative to the *manifest*, so out of the box only files beside
-`host.toml` are readable -- which is the sandbox doing its job.
+Two anchors, on purpose. **Manifest paths are project-relative** -- resolved
+against `host.toml`, not against your shell -- so a grant names the same
+directory wherever you run from and travels with the app through `air dist`.
+**Command-line grants are relative to your shell**, because that is where you
+are looking.
+
+Without a grant the app names the file it could not open and prints these
+options, rather than failing with nothing to act on.
 
 Exit codes: `0` success, `1` usage, `2` I/O failure. Output matches coreutils
 `sha256sum` byte for byte, two spaces and all.
