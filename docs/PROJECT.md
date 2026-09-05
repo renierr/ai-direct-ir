@@ -568,6 +568,59 @@ integer ABIs to WIT worlds carried by the Component Model. The Core mechanisms
 stay until there is a component path that replaces them; they do not become a
 compatibility layer.
 
+### WASI 0.3, And Why Not Yet
+
+WASI 0.3 (Preview 3) folds async into the Component Model itself: `wasi:io`
+disappears and its work moves into the canonical ABI as native `stream<t>`
+and `future<t>` types. Stdin stops being a resource with a
+`blocking-read` method and becomes
+`read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>`.
+That is the right long-term shape, and it is not adoptable yet.
+
+What the pinned toolchain actually offers, as of `wasmtime 48.0.1`:
+
+- `wasmtime-wasi` gates p3 behind a non-default `p3` feature; the defaults are
+  `p1` and `p2`. The module documents itself as an "experimental, unstable and
+  incomplete implementation ... not ready for production use", and states that
+  p3-only bug and security fixes will not get patch releases.
+- `wasmtime`'s own `Config::wasm_component_model_async` says support for the
+  proposal is "very incomplete".
+- p3 covers `cli`, `clocks`, `filesystem`, `random`, and `sockets`. There is no
+  p3 `wasi:http`.
+- p3 ships no `add_to_linker_sync`. It is async by construction, while `air` is
+  synchronous throughout (`p2::add_to_linker_sync` and `Linker::instantiate` in
+  `component.rs`, `p1::add_to_linker_sync` in `link.rs`). Adopting p3 means an
+  async runtime inside the harness and async plumbing through `cmds.rs`,
+  `net.rs`, and the eframe path.
+
+By contrast `p2` is a default feature, its implementation carries no such
+caveat, and its WIT is at `0.2.12` — a maintained patch line on a released
+standard, extended additively through `@since` gates. That is the base to build
+on.
+
+The interesting part is that this is a harness question, not an application
+one. `;; @wasi` already hides the WASI version from applications: `sha256sum`
+imports `"wasi" "read"` and `"wasi" "write"` from the generated `$wasi` core
+instance, and those names are the harness's ABI, not WASI's. If `boundary.rs`
+can wrap `stream.read` in a blocking shim that keeps those core signatures,
+a p3 move costs the generator and nothing else — no example changes. Whether a
+synchronously-lifted core task can block on `stream.read` in Wasmtime is the
+one question a spike would settle, and it is unanswered here. Note also that
+`examples/server/` and every `native` target are Preview 1 and unaffected
+either way.
+
+The text format is already ready: `wat 1.258` / `wast 258` parse `stream` and
+`future` types along with the `stream.read`, `future.read`, `task.return`, and
+`waitable-set.wait` intrinsics, and `futures` and `bytes` are already in
+`air/Cargo.lock`. A spike needs no new dependency download.
+
+Revisit when any of these fires: `wasmtime-wasi` drops the "not ready for
+production use" language from p3, p3 becomes a default feature, or a p3
+`wasi:http` lands that a real application here wants. Until then p3 is a watch
+item, not a milestone — and a harness that carried both p2 and p3 at once would
+be exactly the compatibility layer this project declines to build without a
+real consumer.
+
 ## Next Work
 
 Ordered so that each step is provable on its own, and so the catalog stops
@@ -594,6 +647,9 @@ being specification-only before more specification is written.
 6. After the component path works end to end, present SQLite candidates for
    approval; only then add a generic writable data capability and a
    `mail-store` provider.
+7. Keep a standing check on WASI 0.3 rather than scheduling it. See WASI 0.3,
+   And Why Not Yet for the state of the implementation and the conditions that
+   would turn it into real work.
 
 ## Maintenance
 
