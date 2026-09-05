@@ -4,7 +4,7 @@ use wasmtime::{Engine, Result};
 use wasmtime_wasi::I32Exit;
 
 use crate::link::link_all;
-use crate::manifest::{Manifest, Target};
+use crate::manifest::{Manifest, Mode, Target};
 
 use crate::fail;
 
@@ -41,11 +41,15 @@ pub fn run_manifest(engine: &Engine, path: &str, env: GuestEnv) -> Result<()> {
             "{path} targets a browser; build it, then serve its directory and open index.html"
         ));
     }
-    if manifest.target == Target::Gui {
-        return crate::gui::run(engine.clone(), manifest, manifest_base(path));
-    }
     if manifest.target == Target::Component {
-        return crate::component::run(engine, &manifest, &manifest_base(path), &env);
+        let base = manifest_base(path);
+        // `gui` differs from `command` only in who calls the entry point and
+        // how often: the linking, the grants and the WASI boundary are the
+        // same component path.
+        return match manifest.mode {
+            Mode::Gui => crate::gui::run(engine, &manifest, &base),
+            Mode::Command => crate::component::run(engine, &manifest, &base, &env),
+        };
     }
     let base = manifest_base(path);
     let mut linked = link_all(engine, &manifest, &base)?;

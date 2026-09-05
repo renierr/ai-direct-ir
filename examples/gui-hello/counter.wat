@@ -1,5 +1,6 @@
-;; Reusable shared-memory GUI library proof. It has no host effects.
-(module
+;; A reusable core module with no host effects, linked into the component
+;; beside the application and sharing its one memory.
+(core module $counter
   (import "env" "memory" (memory 1))
-  (func (export "add_one") (param i32) (result i32)
+  (func (export "add-one") (param i32) (result i32)
     (i32.add (local.get 0) (i32.const 1))))

@@ -2,7 +2,18 @@
 
 use wasmtime::{Engine, Result};
 
-use crate::manifest::{Manifest, Target};
+use crate::manifest::Manifest;
+
+/// What `air new` offers to scaffold. This is not `manifest::Target`: `Gui` is
+/// a component whose manifest says `mode = "gui"`, so the two would-be enums
+/// answer different questions -- what to write out, and what to link against.
+#[derive(PartialEq, Eq)]
+enum Kind {
+    Component,
+    Native,
+    Browser,
+    Gui,
+}
 
 use crate::fail;
 
@@ -57,7 +68,7 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
         &src_readme,
         &skill,
     ];
-    if target == Target::Browser {
+    if target == Kind::Browser {
         files.extend([&index, &web_host]);
     }
     for p in files {
@@ -72,10 +83,10 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
     }
     let hello = format!("hello from {name}\n");
     let (starter, manifest) = match target {
-        Target::Browser => browser_starter(name),
-        Target::Gui => gui_starter(name),
-        Target::Component => component_starter(name),
-        Target::Native => {
+        Kind::Browser => browser_starter(name),
+        Kind::Gui => gui_starter(name),
+        Kind::Component => component_starter(name),
+        Kind::Native => {
             let starter = format!(
                 ";; {name}.wat — {name} app, hosted by air.\n\
          ;; Build: air build\n\
@@ -195,7 +206,7 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
             &target,
         ),
     )?;
-    if target == Target::Browser {
+    if target == Kind::Browser {
         std::fs::write(&index, include_str!("../../templates/browser-index.html"))?;
         std::fs::write(
             &web_host,
@@ -204,7 +215,7 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
     }
     let manifest: Manifest = crate::manifest::load(toml.to_str().unwrap())?;
     build_wat(engine, toml.to_str().unwrap(), &manifest)?;
-    let extra = if target == Target::Browser {
+    let extra = if target == Kind::Browser {
         "\n  index.html\n  web-host.js"
     } else {
         ""
@@ -212,7 +223,7 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
     println!(
         "created {name}/:\n  {name}.wat\n  {name}.wasm\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  src/\n  .agents/skills/ai-direct-ir/\n  .gitignore{extra}\n\
          next:\n  cd {name} && air check{}",
-        if target == Target::Browser {
+        if target == Kind::Browser {
             " && air serve"
         } else {
             " && air run"
@@ -223,9 +234,9 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
 
 /// Render one application-focused document for the selected target; generated
 /// projects should not carry irrelevant instructions for the other runtime.
-fn project_doc(template: &str, name: &str, target: &Target) -> String {
+fn project_doc(template: &str, name: &str, target: &Kind) -> String {
     let (target_name, run_command, workflow, files, contract, verify, agent_contract) = if *target
-        == Target::Browser
+        == Kind::Browser
     {
         (
             "browser",
@@ -236,15 +247,15 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
             "Use `air serve` and test the result in a browser",
             "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
         )
-    } else if *target == Target::Gui {
+    } else if *target == Kind::Gui {
         (
-            "native GUI",
+            "native GUI component",
             "air run",
-            "`air run` opens the native egui window and calls the configured entry once per UI frame. `air dist` contains the executable, manifest, and compiled application.",
+            "`air run` opens the native egui window and calls the configured entry once per UI frame. `air check` links and instantiates without opening a window. `air dist` contains the executable, manifest, and compiled application.",
             "",
-            "The module exports a zero-argument frame function. It may import built-in capabilities such as `ui.*` and any project-declared `[[libs]]` or `[[bridges]]` provider. WAT owns state; the host renders the built-in controls using egui. Read `docs/PROJECT.md` before changing a built-in import.",
+            "The component exports a zero-argument frame function. It imports `ai-direct:host/ui` and may import any WASI 0.2 interface or `[[providers]]` component. WAT owns state; the host renders the controls using egui.",
             "Run `air run`, interact with the window, and confirm expected state changes",
-            "- `ui.label(ptr, len)` and `ui.button(ptr, len) -> i32` are built-in GUI conveniences, not a limit on application dependencies. Add Core WASM providers through `[[libs]]` or `[[bridges]]`; their exports can use any namespace.
+            "- `label: func(text: string)` and `button: func(text: string) -> bool` are the host's UI interface, not a limit on application dependencies. Add component dependencies through `[[providers]]`.
 - The entry runs once per UI frame. Button clicks are returned on the following frame; retain application state in WAT globals or memory.
 - `air check` links the complete declared graph. An unresolved import is an integration error, not a reason to add an application-specific harness API.",
         )
@@ -270,7 +281,7 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
         .replace("__TARGET_AGENT_CONTRACT__", agent_contract)
 }
 
-fn prompt_target() -> Result<Target> {
+fn prompt_target() -> Result<Kind> {
     use std::io::{self, IsTerminal, Write};
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         return select_target();
@@ -280,10 +291,10 @@ fn prompt_target() -> Result<Target> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     match input.trim() {
-        "" | "component" => Ok(Target::Component),
-        "native" => Ok(Target::Native),
-        "browser" => Ok(Target::Browser),
-        "gui" => Ok(Target::Gui),
+        "" | "component" => Ok(Kind::Component),
+        "native" => Ok(Kind::Native),
+        "browser" => Ok(Kind::Browser),
+        "gui" => Ok(Kind::Gui),
         other => fail(format!(
             "unknown target `{other}`: choose component, native, browser, or gui"
         )),
@@ -292,7 +303,7 @@ fn prompt_target() -> Result<Target> {
 
 /// A compact selector keeps interactive `new` discoverable without giving up
 /// the line-input fallback needed by piped scripts and CI.
-fn select_target() -> Result<Target> {
+fn select_target() -> Result<Kind> {
     use crossterm::{
         cursor::{MoveToColumn, MoveUp},
         event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -359,10 +370,10 @@ fn select_target() -> Result<Target> {
             KeyCode::Enter => {
                 println!();
                 return Ok(match selected {
-                    0 => Target::Component,
-                    1 => Target::Native,
-                    2 => Target::Browser,
-                    _ => Target::Gui,
+                    0 => Kind::Component,
+                    1 => Kind::Native,
+                    2 => Kind::Browser,
+                    _ => Kind::Gui,
                 });
             }
             KeyCode::Esc => {
@@ -434,29 +445,53 @@ fn component_starter(name: &str) -> (String, String) {
 fn gui_starter(name: &str) -> (String, String) {
     let starter = format!(
         ";; {name}.wat -- native egui app hosted by air.\n\
-         ;; The entry runs every UI frame. Strings are UTF-8 in env.memory.\n\
+         ;; The entry runs every UI frame, and is an ordinary component\n\
+         ;; export: `mode = \"gui\"` only decides who calls it and how often.\n\
          ;; A named data segment gets $name.ptr and $name.len from air, so\n\
          ;; no string length is ever written by hand.\n\
-         (module\n\
-          \x20 (import \"env\" \"memory\" (memory 1))\n\
-          \x20 (import \"ui\" \"label\" (func $label (param i32 i32)))\n\
-          \x20 (import \"ui\" \"button\" (func $button (param i32 i32) (result i32)))\n\
-          \x20 ;; @include src/state.wat\n\
-          \x20 (global $count (mut i32) (i32.const 0))\n\
-         \x20 (func (export \"frame\")\n\
-         \x20   (call $label (global.get $title.ptr) (global.get $title.len))\n\
-         \x20   (if (call $button (global.get $increment.ptr) (global.get $increment.len))\n\
-         \x20     (then (global.set $count (i32.add (global.get $count) (i32.const 1)))))\n\
-         \x20   (call $label (global.get $status.ptr) (global.get $status.len)))\n\
-         \x20 (data $title (i32.const 0) \"Hello from {name}\")\n\
-         \x20 (data $increment (i32.const 256) \"Increment\")\n\
-         \x20 (data $status (i32.const 512) \"Button is ready\")\n\
+         (component\n\
+         \x20 ;; @wasi pages=1\n\
+         \n\
+         \x20 ;; The host's UI capability, imported like any other interface.\n\
+         \x20 ;; Strings cross by value: the canonical ABI does the copy.\n\
+         \x20 (import \"ai-direct:host/ui\" (instance $ui\n\
+         \x20   (export \"label\" (func (param \"text\" string)))\n\
+         \x20   (export \"button\" (func (param \"text\" string) (result bool)))))\n\
+         \x20 (alias export $ui \"label\" (func $label))\n\
+         \x20 (alias export $ui \"button\" (func $button))\n\
+         \x20 (core func $label-l\n\
+         \x20   (canon lower (func $label) (memory $memory) (realloc $realloc)))\n\
+         \x20 (core func $button-l\n\
+         \x20   (canon lower (func $button) (memory $memory) (realloc $realloc)))\n\
+         \x20 (core instance $host-ui\n\
+         \x20   (export \"label\" (func $label-l))\n\
+         \x20   (export \"button\" (func $button-l)))\n\
+         \n\
+         \x20 (core module $main\n\
+         \x20   (import \"env\" \"memory\" (memory 1))\n\
+         \x20   (import \"ui\" \"label\" (func $label (param i32 i32)))\n\
+         \x20   (import \"ui\" \"button\" (func $button (param i32 i32) (result i32)))\n\
+         \x20   ;; @include src/state.wat\n\
+         \x20   (global $count (mut i32) (i32.const 0))\n\
+         \x20   (func (export \"frame\")\n\
+         \x20     (call $label (global.get $title.ptr) (global.get $title.len))\n\
+         \x20     (if (call $button (global.get $increment.ptr) (global.get $increment.len))\n\
+         \x20       (then (global.set $count (i32.add (global.get $count) (i32.const 1)))))\n\
+         \x20     (call $label (global.get $status.ptr) (global.get $status.len)))\n\
+         \x20   (data $title (i32.const 0) \"Hello from {name}\")\n\
+         \x20   (data $increment (i32.const 256) \"Increment\")\n\
+         \x20   (data $status (i32.const 512) \"Button is ready\"))\n\
+         \x20 (core instance $app (instantiate $main\n\
+         \x20   (with \"env\" (instance $mem))\n\
+         \x20   (with \"ui\" (instance $host-ui))))\n\
+         \n\
+         \x20 (func $frame (canon lift (core func $app \"frame\")))\n\
+         \x20 (export \"frame\" (func $frame))\n\
          )\n"
     );
     let manifest = format!(
         "# {name}: native egui GUI app.\n\
-         target = \"gui\"\n\
-         mode = \"command\"\n\
+         mode = \"gui\"\n\
          \n\
          [app]\n\
          source = \"{name}.wat\"\n\

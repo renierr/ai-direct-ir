@@ -34,8 +34,9 @@ Current Core WAT projects need only `air` on `PATH`:
 |---|---|
 | `air` | Builds, checks, runs, and packages the project. |
 
-Browser projects also need a browser to use the generated page. GUI projects
-need the native display libraries supported by the distributed `air` binary.
+Browser projects also need a browser to use the generated page. A `mode =
+"gui"` project needs the native display libraries supported by the distributed
+`air` binary.
 Application authors do not need Rust, Cargo, a Rust WASM target, or provider
 toolchains merely to edit WAT and run `air build`, `check`, `run`, or
 `dist`.
@@ -102,9 +103,13 @@ whether it is a component (layer `0d 00`) or a Core module (`01 00`); declaring
 one that disagrees is an error rather than a confusing failure later.
 
 `target = "native"` (Core WASM on WASI Preview 1) remains supported, and is
-still what `server`, `prompts-raw`, and `gui-hello` use — in each case because
-of a prebuilt Core provider or a pointer-passing host ABI, not because WASI 0.2
-lacks an interface. See `docs/PROJECT.md`.
+still what `prompts-raw` uses — because of a prebuilt Core provider linked
+through `[[bridges]]`, not because WASI 0.2 lacks an interface. See
+`docs/PROJECT.md`.
+
+`mode` is a separate question from `target`: `command` enters the app once,
+`gui` opens a native window and calls the entry point once per drawn frame. A
+GUI app is an ordinary component that imports `ai-direct:host/ui`.
 
 ### Providers
 
@@ -164,9 +169,9 @@ the target and its linker to be installed separately.
 
 ## Layout
 
-- `air/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`net`/`link`/`cmds` modules)
+- `air/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`link`/`cmds` modules)
 - `air/tests/cli.rs` — end-to-end tests that run the real binary
-- `examples/{hello,pi,prompts,provider-demo}/` — WASI 0.2 components; `examples/{server,prompts-raw,gui-hello}/` — Core WASM. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
+- `examples/` — WASI 0.2 components, except `prompts-raw/` (Core WASM, for its `[[bridges]]` provider). Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
 - `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 

@@ -81,5 +81,8 @@ change.
 - A component consumes another through `[[providers]]`, wired at link time; no
   composition tool is involved. There is no host socket layer — a server is a
   component that owns its accept loop.
+- `target` is the linking domain, `mode` the host loop. A GUI app is a
+  component with `mode = "gui"` importing `ai-direct:host/ui`; `target = "gui"`
+  does not exist.
 
 `./build.sh` produces `dist/air`. Foreign `.wasm`? Start with `air inspect`.

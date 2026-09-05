@@ -3,8 +3,9 @@
 //! The harness owns the ONE shared memory and never depends on guest
 //! exports to find it (a lib instance may export no memory at all).
 //!
-//! There is no socket table here any more. It existed for the `net.*`
-//! syscalls, and a component reaches `wasi:sockets` directly.
+//! There is no socket table here any more, and no UI command queue. Both
+//! existed for Core-only host namespaces: `net.*` retired to `wasi:sockets`,
+//! `ui.*` to the `ai-direct:host/ui` component interface.
 
 use wasmtime::{Caller, Memory, Result};
 
@@ -14,8 +15,6 @@ pub struct Host {
     pub wasi: WasiP1Ctx,
     pub shared: Option<Memory>,
     pub term_active: bool,
-    pub ui: Vec<UiCommand>,
-    pub ui_clicked: std::collections::HashSet<String>,
 }
 
 impl Host {
@@ -24,15 +23,8 @@ impl Host {
             wasi,
             shared: None,
             term_active: false,
-            ui: Vec::new(),
-            ui_clicked: std::collections::HashSet::new(),
         }
     }
-}
-
-pub enum UiCommand {
-    Label(String),
-    Button(String),
 }
 
 impl Drop for Host {

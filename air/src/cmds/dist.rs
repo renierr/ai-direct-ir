@@ -39,7 +39,6 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             match manifest.target {
                 Target::Native => "native",
                 Target::Browser => "browser",
-                Target::Gui => "gui",
                 Target::Component => "component",
             }
             .into(),
@@ -50,6 +49,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         toml::Value::String(
             match manifest.mode {
                 crate::manifest::Mode::Command => "command",
+                crate::manifest::Mode::Gui => "gui",
             }
             .into(),
         ),
@@ -112,10 +112,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             }
         }
     }
-    if matches!(
-        manifest.target,
-        Target::Native | Target::Gui | Target::Component
-    ) {
+    if matches!(manifest.target, Target::Native | Target::Component) {
         let mut libs = Vec::new();
         for lib in &manifest.libs {
             let path = copy_bundle_file(&base, &dist, &lib.path)?;
@@ -196,7 +193,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         match manifest.target {
             Target::Native => "native",
             Target::Browser => "browser",
-            Target::Gui => "GUI",
+            Target::Component if manifest.mode == crate::manifest::Mode::Gui => "GUI component",
             Target::Component => "component",
         },
         dist.display()

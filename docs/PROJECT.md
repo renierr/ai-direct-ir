@@ -54,33 +54,24 @@ line or a Core function index back to authored source.
 |---|---|
 | `native` | Wasmtime, WASI Preview 1, experimental `term.*`, and declared Core providers. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
-| `gui` | Native egui `ui.*` host and declared Core providers. |
 | `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. Consumes provider components through `[[providers]]`. **The default for new projects.** |
 
-`hello`, `pi`, and `prompts` are WASI 0.2 components. The other three stay on
-Core WASM, for three different reasons worth keeping straight:
+`gui` is not in that table, and that is the point: a GUI application is an
+ordinary component, and `mode = "gui"` in its manifest decides only who calls
+its entry point and how often. See Drawing A Frame.
 
-None of the three is blocked by WASI lacking an interface, which is what an
-earlier version of this document claimed:
+Every example except `prompts-raw` is now a WASI 0.2 component. That one needs
+`bridge.text_width`, a prebuilt Core module from a Rust crate, linked through
+`[[bridges]]` by sharing raw memory -- which a component cannot do. It is the
+last Core application in the repository, and the reason is composition, not a
+missing WASI interface.
 
-- `server` needs its `[[libs]]`/`[[bridges]]` providers as *components*. Those
-  entries link prebuilt Core modules by sharing raw memory, which a component
-  cannot do. `wasi:sockets` and `wasi:filesystem` exist, so the rest is a
-  rewrite.
-- `prompts-raw` needs `term.*`, which components can now import as
-  `ai-direct:host/term`, and `bridge.text_width`, which is a prebuilt Core
-  module from a Rust crate. The bridge is what is left.
-- `gui-hello` needs `ui.*` as a value-based interface. `ui.*` is a
-  project-owned egui ABI either way; only its pointer-passing signatures stop
-  it from crossing.
-
-Preview 1 is therefore not deprecated. It stays the path for Core providers,
-and for host ABIs that still pass raw pointers.
+Preview 1 is therefore not deprecated. It stays the path for Core providers.
 
 Core project-owned providers currently use experimental `[[libs]]` (shared
 memory) or `[[bridges]]` (copying adapter) manifest entries. Their exports are
-auto-wired under a project-declared namespace. These, and `ui.*`, `web.*`,
-and `term.*`, are builder-phase interfaces: redesign them directly
+auto-wired under a project-declared namespace. These, and `web.*` and
+`term.*`, are builder-phase interfaces: redesign them directly
 when the Component Model provides the correct generic boundary. Do not add
 shims or compatibility layers without a concrete released consumer.
 
@@ -458,8 +449,15 @@ per-request descriptor and stream drops together with the heap reset, and stops
 on `/quit` with exit 0. Benchmarked at 17.3k req/s on the in-memory route and
 10.2k on `index.html` -- see Retiring net.*.
 
-Fresh native, browser, and GUI scaffolds have completed their applicable
-`new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
+`gui-hello` is a component: `air check` links, grants and instantiates it and
+verifies the `frame` export without opening a window, and `air dist` packages
+it. The frame loop itself is verified by hand, because egui needs a display.
+What a frame does is not: `ai-direct:host/ui` is linked for every component, so
+a command-mode component calls `label` and `button` under test and proves the
+strings cross by value and that invalid UTF-8 never reaches the host.
+
+Fresh native, browser, GUI, and component scaffolds have completed their
+applicable `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
 `src/views/inbox.wat`; changing an included fragment triggers an automatic
 rebuild.
@@ -470,8 +468,6 @@ rebuild.
 - No build-time composition, so a component app ships alongside its providers
   rather than as one fused artifact, and resource handles cannot cross a
   provider boundary.
-- `ui.*` is not available to components: its signatures pass raw pointers and
-  need value-based replacements first.
 - The heap frees in one order or not at all. `heap-mark`/`heap-reset` release a
   whole iteration at once, which is what a request loop needs and nothing a
   long-lived collection can use. There is still no general allocator and no
@@ -484,8 +480,6 @@ rebuild.
   embed a prebuilt `.wasm`, and `wasm-tools compose` is deprecated upstream, so
   the mechanism is an open decision (see Intended Direction).
 - No released provider package or provider resolver/lockfile/`air add`.
-- No SHA-256 WIT component proof. The provider catalog has a complete format
-  specification and zero provider packages.
 - No generic writable WASI data mount, persistence provider, native sidecar, or
   browser provider composition.
 - The mail example remains a Core WASI Preview 1 mock inbox. It has proposed
@@ -504,10 +498,10 @@ WIT interfaces
   -> one distributable component plus air
 ```
 
-The Core `[[libs]]`, `[[bridges]]`, `ui.*`, `web.*`, and `term.*` mechanisms
-are experimental transitional tools, not the final public provider format.
-`net.*` was one of them and is the first to have finished the trip: it is
-gone.
+The Core `[[libs]]`, `[[bridges]]`, `web.*`, and `term.*` mechanisms are
+experimental transitional tools, not the final public provider format. `net.*`
+and `ui.*` were two of them and have finished the trip: both are gone, one to
+`wasi:sockets` and one to `ai-direct:host/ui`.
 
 ### Retiring net.*
 
@@ -681,14 +675,57 @@ A component imports a project-owned interface exactly as it imports a WASI one;
 the harness supplies it through the component linker. `ai-direct:host/term`
 exposes the terminal capability that Core apps reach through `term.*`.
 
-`ui.*` has not followed, for a reason that is not about WASI: its Core
-signatures pass pointers into guest memory, which has no meaning across a
-component boundary. It needs value-based signatures (`string`, `list<u8>`)
-first. That is a redesign, not a blocker.
+`ai-direct:host/ui` is the second, and it shows what the trip costs. The Core
+`ui.*` namespace it replaces passed `(ptr, len)` into guest memory, which has
+no meaning across a component boundary: the two sides share no linear memory,
+and a component need not have one the host can name. Stated in WIT the
+signatures need no memory at all --
+
+```wit
+label:  func(text: string);
+button: func(text: string) -> bool;
+```
+
+-- and the canonical ABI does the copy, the bounds check and the UTF-8
+validation the Core wrappers did by hand. The host implementation lost its
+`shared_mem` lookup, its `MAX_TEXT_BYTES` bound and its `from_utf8`, and gained
+nothing. That is the general shape: a pointer-passing ABI restated in WIT is
+smaller, not larger.
 
 `net.*` did not need the trip at all, and it has been deleted. It existed
 because Core WASM had no sockets; a component asks for `;; @wasi sockets` and
 gets `wasi:sockets` straight from the WIT. See Retiring net.*.
+
+### Drawing A Frame
+
+A GUI application is an ordinary WASI 0.2 component. `mode = "gui"` in its
+manifest picks the host loop -- open a window and call the entry point once per
+drawn frame, instead of once -- and nothing else: the linking, the capability
+grants and the generated boundary are the same component path a command takes.
+
+That is why `gui` is a `mode` and not a `target`. A target names a linking
+domain, and there is only one here; who calls `frame` is a separate question
+with a separate answer. `target = "gui"` is gone, and a manifest that says
+`mode = "gui"` over a Core module is rejected at load rather than at an
+unresolved import.
+
+The guest describes a whole frame and returns. `label` and `button` record
+into a list the runtime replays into egui afterwards, so the guest never holds
+an egui handle and a trap mid-frame loses the frame rather than the window. A
+click is reported on the frame after the one that drew the button, which is
+what makes `button` a pure question with an immediate answer.
+
+Nothing in the loop touches the bump heap: a `string` parameter travels
+guest-to-host, so the guest hands over a pointer into its own memory and the
+host copies out. Only host-produced values need `cabi_realloc`, and this
+interface produces none. A frame loop therefore needs no `heap-mark`, unlike
+the request loop in Releasing Memory.
+
+`examples/gui-hello/` also shows what `[[libs]]` becomes inside a component:
+`counter.wat` is a second `(core module ...)`, `;; @include`d and instantiated
+with the same `$mem`. Core modules still link by sharing a memory -- that
+mechanism did not go away, it moved inside the component, where it needs no
+manifest entry at all.
 
 ### What Actually Needs A Harness Change
 
@@ -933,9 +970,13 @@ being specification-only before more specification is written.
    and growing past one page, still wait on an application that states the
    requirement — a long-lived collection rather than a per-request buffer.
    Grow the mail example far enough to state it.
-3. Give `ui.*` value-based signatures so components can import it, then
-   convert `gui-hello`. `term.*` already made the trip as
-   `ai-direct:host/term`; `net.*` needed no trip and has been deleted.
+3. Convert `examples/prompts-raw/`, the last Core application. It needs
+   `term.*`, which components already import as `ai-direct:host/term`, and
+   `bridge.text_width`, a prebuilt Core module from a Rust crate that
+   `[[bridges]]` links by sharing raw memory. The bridge is the whole
+   remaining question: as a provider component it would be a WIT function over
+   a `string`, which is a catalog package rather than a harness change. See
+   Provider Linking.
 4. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing. See Provider Linking above. Converting
    `examples/server/` did not need it: source libs `;; @include`, and a

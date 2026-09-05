@@ -18,9 +18,6 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
     if manifest.target == Target::Browser {
         return check_browser(engine, manifest_path, manifest, &base);
     }
-    if manifest.target == Target::Gui {
-        return check_gui(engine, manifest_path, manifest, &base);
-    }
     if manifest.target == Target::Component {
         return crate::component::check(engine, manifest_path, manifest, &base);
     }
@@ -53,34 +50,6 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
             ));
         }
     }
-    println!("check {manifest_path}: all modules linked, all imports satisfied");
-    Ok(())
-}
-
-fn check_gui(
-    engine: &Engine,
-    manifest_path: &str,
-    manifest: &Manifest,
-    base: &std::path::Path,
-) -> Result<()> {
-    if !matches!(manifest.mode, crate::manifest::Mode::Command) {
-        return fail("GUI projects require mode = \"command\"".into());
-    }
-    let app = wasmtime::Module::from_file(engine, crate::link::join(base, &manifest.app.path))?;
-    // The common linker is the authority for every target: a project may add
-    // any Core WASM provider through [[libs]] or [[bridges]]. Instantiation
-    // proves that providers and built-in host capabilities satisfy imports.
-    link_all(engine, manifest, base)?;
-    match app.exports().find(|e| e.name() == manifest.app.run) {
-        Some(e) if browser_func_sig_ok(&e.ty(), 0, 0) => {}
-        _ => {
-            return fail(format!(
-                "GUI app needs zero-argument export `{}`",
-                manifest.app.run
-            ));
-        }
-    }
-    println!("run `{}`: signature ok", manifest.app.run);
     println!("check {manifest_path}: all modules linked, all imports satisfied");
     Ok(())
 }

@@ -46,7 +46,7 @@ pub fn print_help() {
         ),
         (
             "run [manifest.toml]",
-            "link and execute a native, GUI, or component app; defaults to host.toml",
+            "link and execute a native or component app; defaults to host.toml",
         ),
         (
             "serve [manifest.toml]",
@@ -80,7 +80,7 @@ pub fn print_help() {
         ("cd myapp && air build", ""),
         ("air check", "validate host.toml and the compiled app"),
         ("air dist", "create a shippable dist/ bundle"),
-        ("air run", "native or GUI project"),
+        ("air run", "native or component project"),
         ("air serve", "browser project"),
         (
             "air inspect external-lib.wasm",

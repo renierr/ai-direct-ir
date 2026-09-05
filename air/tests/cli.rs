@@ -754,6 +754,130 @@ fn component_scaffold_builds_checks_and_runs() {
     assert_eq!(stdout(&ran), "hello from app\n");
 }
 
+/// A component that calls `ai-direct:host/ui` and reports what came back.
+/// `label` and `button` take a `string`, so the whole exchange is by value:
+/// nothing here names a host pointer, and the canonical ABI does the copy.
+fn ui_caller(text: &str) -> String {
+    format!(
+        r#"(component
+  ;; @wasi stdout
+  (import "ai-direct:host/ui" (instance $ui
+    (export "label" (func (param "text" string)))
+    (export "button" (func (param "text" string) (result bool)))))
+  (alias export $ui "label" (func $label))
+  (alias export $ui "button" (func $button))
+  (core func $label-l
+    (canon lower (func $label) (memory $memory) (realloc $realloc)))
+  (core func $button-l
+    (canon lower (func $button) (memory $memory) (realloc $realloc)))
+  (core instance $host-ui
+    (export "label" (func $label-l))
+    (export "button" (func $button-l)))
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    (import "ui" "label" (func $label (param i32 i32)))
+    (import "ui" "button" (func $button (param i32 i32) (result i32)))
+    ;; @data 0x100..0x200
+    (data $msg "{text}")
+    (data $no "no\n")
+    (data $yes "yes\n")
+    (func (export "run") (result i32)
+      (call $label (global.get $msg.ptr) (global.get $msg.len))
+      (if (call $button (global.get $msg.ptr) (global.get $msg.len))
+        (then (call $write (call $get_stdout)
+                (global.get $yes.ptr) (global.get $yes.len) (i32.const 0x300)))
+        (else (call $write (call $get_stdout)
+                (global.get $no.ptr) (global.get $no.len) (i32.const 0x300))))
+      (i32.const 0)))
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))
+    (with "ui" (instance $host-ui))))
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
+)
+"#
+    )
+}
+
+/// The UI capability is a WIT interface, so any component may import it --
+/// `mode = "gui"` decides who calls the entry point, not what it can reach.
+/// Nothing is clicked outside a window, so `button` answers false.
+#[test]
+fn the_ui_interface_answers_a_component_by_value() {
+    let project = scaffold_target("ui-interface", "component");
+    write_app(&project, &ui_caller(r"caf\u{e9} \u{2713}"));
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran), "no\n");
+}
+
+/// The retired Core `ui.*` wrappers read `(ptr, len)` out of guest memory and
+/// had to bound-check and UTF-8-validate by hand. Stated in WIT the canonical
+/// ABI does it, and a `string` that is not UTF-8 never reaches the host.
+#[test]
+fn the_ui_interface_rejects_text_that_is_not_utf8() {
+    let project = scaffold_target("ui-utf8", "component");
+    // A lone continuation byte: valid in a `list<u8>`, never in a `string`.
+    write_app(&project, &ui_caller(r"\80"));
+    let ran = run(&project, &["run"]);
+    assert!(
+        !ran.status.success(),
+        "invalid UTF-8 must not reach the host"
+    );
+    assert!(
+        stderr(&ran).to_lowercase().contains("utf-8"),
+        "{}",
+        stderr(&ran)
+    );
+}
+
+/// A GUI app is an ordinary component: `gui` is a `mode`, so the manifest
+/// states no target at all and the artifact's own preamble settles it.
+#[test]
+fn a_gui_project_is_a_component_checked_without_a_window() {
+    let project = scaffold_target("gui-scaffold", "gui");
+    let manifest = std::fs::read_to_string(project.join("host.toml")).expect("read manifest");
+    assert!(manifest.contains("mode = \"gui\""), "{manifest}");
+    assert!(!manifest.contains("target"), "{manifest}");
+
+    let built = run(&project, &["build"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+    let bytes = std::fs::read(project.join("app.wasm")).expect("read artifact");
+    assert_eq!(&bytes[4..6], &[0x0d, 0x00], "a GUI app must be a component");
+
+    // Linking, granting and instantiating are the component path; only the
+    // frame loop needs a display, and `check` never enters it.
+    let checked = run(&project, &["check"]);
+    assert!(
+        checked.status.success(),
+        "check failed: {}",
+        stderr(&checked)
+    );
+    let report = stdout(&checked);
+    assert!(report.contains("run `frame`: signature ok"), "{report}");
+    assert!(report.contains("all imports satisfied"), "{report}");
+}
+
+/// There is no Core host for `ui.*` any more, so a frame loop over a Core
+/// module cannot be linked. Say so at the manifest rather than at an
+/// unresolved import.
+#[test]
+fn a_gui_manifest_needs_a_component() {
+    let project = scaffold_target("gui-core-module", "gui");
+    write_app(&project, "(module (func (export \"frame\")))\n");
+    let out = run(&project, &["check"]);
+    assert!(!out.status.success(), "a Core GUI app must be rejected");
+    assert!(
+        stderr(&out).contains("needs a component"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 #[test]
 fn the_target_is_inferred_when_the_manifest_omits_it() {
     let project = scaffold_target("target-inference", "component");

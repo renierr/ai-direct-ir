@@ -2,14 +2,21 @@
 
 use serde::Deserialize;
 
-/// How the host enters an application. `server` retired with the `net.*`
-/// syscalls: a component owns its own accept loop through `wasi:sockets`, so
-/// there is nothing left for a host-owned one to do. A manifest that still
-/// says `mode = "server"` fails to parse, which is the right way to find out.
-#[derive(Deserialize, Clone, Copy)]
+/// How the host enters an application: once, or once per drawn frame.
+///
+/// `server` retired with the `net.*` syscalls -- a component owns its own
+/// accept loop through `wasi:sockets`, so there is nothing left for a
+/// host-owned one to do. A manifest that still says `mode = "server"` fails to
+/// parse, which is the right way to find out.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Command,
+    /// Open a native window and call the entry point every frame. This is a
+    /// host-loop choice, not a linking domain, so it is a `mode` rather than a
+    /// `target`: a GUI app is an ordinary component that imports
+    /// `ai-direct:host/ui`.
+    Gui,
 }
 
 /// The host implementation an app targets. It is normally inferred: a WASM
@@ -21,7 +28,6 @@ pub enum Mode {
 pub enum Target {
     Native,
     Browser,
-    Gui,
     /// WASM Component + WASI 0.2. A separate linking domain from the Core
     /// targets above, so it shares the manifest and nothing else.
     Component,
@@ -174,23 +180,32 @@ impl Default for Target {
     }
 }
 
-/// Decide what a project is, preferring evidence over declaration: the built
-/// artifact, then its WAT source, then whatever the manifest said.
+/// Decide what a project is, preferring evidence over declaration: the WAT
+/// source, then the built artifact, then whatever the manifest said.
+///
+/// Source first, because the artifact is downstream of it: `air run` rebuilds
+/// a stale `.wasm` before entering it, so an artifact left over from what the
+/// project used to be must not decide what it is now.
 fn resolve_target(manifest: &Manifest, base: &std::path::Path) -> wasmtime::Result<Target> {
-    let mut preamble = [0u8; 8];
-    let artifact = crate::link::join(base, &manifest.app.path);
-    let is_component = match std::fs::File::open(&artifact) {
-        Ok(mut file) => {
-            use std::io::Read;
-            let read = file.read(&mut preamble).unwrap_or(0);
-            Some(is_component_binary(&preamble[..read]))
+    let from_source = manifest
+        .app
+        .source
+        .as_ref()
+        .and_then(|source| std::fs::read_to_string(crate::link::join(base, source)).ok())
+        .map(|text| is_component_source(&text));
+    let is_component = match from_source {
+        Some(found) => Some(found),
+        None => {
+            let mut preamble = [0u8; 8];
+            match std::fs::File::open(crate::link::join(base, &manifest.app.path)) {
+                Ok(mut file) => {
+                    use std::io::Read;
+                    let read = file.read(&mut preamble).unwrap_or(0);
+                    Some(is_component_binary(&preamble[..read]))
+                }
+                Err(_) => None,
+            }
         }
-        Err(_) => manifest
-            .app
-            .source
-            .as_ref()
-            .and_then(|source| std::fs::read_to_string(crate::link::join(base, source)).ok())
-            .map(|text| is_component_source(&text)),
     };
     match (manifest.declared_target, is_component) {
         // Evidence and declaration disagree: say so rather than fail later
@@ -207,8 +222,8 @@ fn resolve_target(manifest: &Manifest, base: &std::path::Path) -> wasmtime::Resu
         }
         (Some(declared), _) => Ok(declared),
         (None, Some(true)) => Ok(Target::Component),
-        // A Core artifact can be hosted three ways, so `native` is the default
-        // and `browser`/`gui` stay an explicit choice.
+        // A Core artifact can be hosted two ways, so `native` is the default
+        // and `browser` stays an explicit choice.
         (None, _) => Ok(Target::Native),
     }
 }
@@ -221,5 +236,14 @@ pub fn load(path: &str) -> wasmtime::Result<Manifest> {
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     manifest.target = resolve_target(&manifest, &base)?;
+    // A frame loop needs `ai-direct:host/ui`, which is a WIT interface: there
+    // is no Core host for it any more. Saying so here keeps the failure at the
+    // manifest rather than at an unresolved import.
+    if manifest.mode == Mode::Gui && manifest.target != Target::Component {
+        return Err(wasmtime::Error::msg(format!(
+            "`mode = \"gui\"` needs a component; `{}` is a Core WASM module",
+            manifest.app.path
+        )));
+    }
     Ok(manifest)
 }

@@ -26,6 +26,14 @@ pub struct Host {
     /// Set while the guest holds the terminal in raw mode, so it is restored
     /// on the way out even if the guest forgets.
     pub term_active: bool,
+    /// What the guest drew this frame, in call order. `ai-direct:host/ui`
+    /// records rather than renders: the guest runs to completion, then the
+    /// GUI runtime replays the list. Empty for every non-GUI component.
+    pub ui: Vec<crate::gui::UiCommand>,
+    /// Which buttons the user pressed on the frame just drawn. A `button`
+    /// call answers from here, so the guest learns about a click on the
+    /// frame after it.
+    pub ui_clicked: std::collections::HashSet<String>,
 }
 
 impl WasiView for Host {
@@ -170,12 +178,15 @@ pub fn link_all(
             ctx: builder.build(),
             table: ResourceTable::new(),
             term_active: false,
+            ui: Vec::new(),
+            ui_clicked: std::collections::HashSet::new(),
         },
     );
 
     let mut linker = Linker::<Host>::new(engine);
     p2::add_to_linker_sync(&mut linker)?;
     add_term_to_linker(&mut linker)?;
+    add_ui_to_linker(&mut linker)?;
     wire_providers(engine, &mut linker, &mut store, manifest, base)?;
     let instance = linker.instantiate(&mut store, &component)?;
     let entry = entry_of(engine, &component, &manifest.app.run)?;
@@ -191,9 +202,7 @@ pub fn link_all(
 /// interface is not a WASI question: a component imports one exactly as it
 /// imports `wasi:io/streams`, and the harness supplies it here.
 ///
-/// Only the memory-free calls are exposed. `ui.*` passes pointers
-/// into guest memory, which has no meaning across a component boundary; they
-/// need value-based signatures (`string`, `list<u8>`) before they can follow.
+/// Only the memory-free calls are exposed.
 const TERM_INTERFACE: &str = "ai-direct:host/term";
 
 fn add_term_to_linker(linker: &mut Linker<Host>) -> Result<()> {
@@ -225,6 +234,47 @@ fn add_term_to_linker(linker: &mut Linker<Host>) -> Result<()> {
     term.func_wrap("read-key", |store: StoreContextMut<'_, Host>, (): ()| {
         Ok((crate::term::read_key(store.data().term_active)?,))
     })?;
+    Ok(())
+}
+
+/// The project's own immediate-mode UI capability.
+///
+/// The Core `ui.*` namespace this replaces passed `(ptr, len)` into guest
+/// memory, which has no meaning across a component boundary: the two sides do
+/// not share a linear memory, and a component may not even have one the host
+/// can name. Stated in WIT the signatures need no memory at all --
+///
+/// ```wit
+/// label:  func(text: string);
+/// button: func(text: string) -> bool;
+/// ```
+///
+/// -- and the canonical ABI does the copy, the bounds check and the UTF-8
+/// validation that the Core wrappers had to do by hand.
+const UI_INTERFACE: &str = "ai-direct:host/ui";
+
+fn add_ui_to_linker(linker: &mut Linker<Host>) -> Result<()> {
+    let mut ui = linker.instance(UI_INTERFACE)?;
+    ui.func_wrap(
+        "label",
+        |mut store: StoreContextMut<'_, Host>, (text,): (String,)| {
+            store.data_mut().ui.push(crate::gui::UiCommand::Label(text));
+            Ok(())
+        },
+    )?;
+    ui.func_wrap(
+        "button",
+        |mut store: StoreContextMut<'_, Host>, (text,): (String,)| {
+            // The answer is last frame's click: this frame's is not known
+            // until the guest has finished describing what to draw.
+            let clicked = store.data().ui_clicked.contains(&text);
+            store
+                .data_mut()
+                .ui
+                .push(crate::gui::UiCommand::Button(text));
+            Ok((clicked,))
+        },
+    )?;
     Ok(())
 }
 
@@ -434,7 +484,7 @@ fn command_func(linked: &mut Linked) -> Result<CommandFunc> {
         })
 }
 
-fn plain_func(linked: &mut Linked) -> Result<wasmtime::component::TypedFunc<(), ()>> {
+pub fn plain_func(linked: &mut Linked) -> Result<wasmtime::component::TypedFunc<(), ()>> {
     let Entry::Function { name } = &linked.entry else {
         return Err(wasmtime::Error::msg("not a function entry"));
     };

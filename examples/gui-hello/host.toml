@@ -1,9 +1,10 @@
-target = "gui"
-mode = "command"
-
-[[libs]]
-path = "counter.wasm"
-as = "counter"
+# gui-hello: a WASI 0.2 component drawn by air's native egui runtime.
+#
+# `mode = "gui"` is a host-loop choice, not a linking domain: the component is
+# linked, granted and instantiated exactly like a command, then entered once
+# per drawn frame instead of once. `air check` proves all of that without
+# opening a window.
+mode = "gui"
 
 [app]
 source = "gui-hello.wat"
