@@ -12,6 +12,29 @@ mod term;
 
 use wasmtime::{Engine, Result};
 
+/// Read leading host options off `run`. Everything from the first
+/// non-option word on is the manifest and then the guest's own arguments, so
+/// an application never has to escape its flags away from `air`'s.
+fn guest_env(args: &[String]) -> wasmtime::Result<(cmds::GuestEnv, &[String])> {
+    let mut env = cmds::GuestEnv::default();
+    let mut rest = args;
+    while let Some(first) = rest.first() {
+        match first.as_str() {
+            "--dir" => {
+                let Some(dir) = rest.get(1) else {
+                    return Err(wasmtime::Error::msg(
+                        "`--dir` needs a directory: air run --dir <path> <manifest> [args...]",
+                    ));
+                };
+                env.dirs.push(dir.clone());
+                rest = &rest[2..];
+            }
+            _ => break,
+        }
+    }
+    Ok((env, rest))
+}
+
 fn usage_err(what: &str, usage: &str) -> Result<()> {
     Err(wasmtime::Error::msg(format!("{what}\nusage: {usage}")))
 }
@@ -71,17 +94,21 @@ fn main() -> Result<()> {
         }
         // Everything after the manifest belongs to the guest, not to `air`.
         "run" => {
-            let (path, rest) = if arg1.is_empty() {
-                ("host.toml", &args[1..])
-            } else {
-                (arg1, &args[2..])
+            let (env, rest) = guest_env(&args[1..])?;
+            let (path, rest) = match rest.split_first() {
+                Some((first, tail)) => (first.as_str(), tail),
+                None => ("host.toml", rest),
             };
-            cmds::run_manifest(&engine, path, rest)
+            cmds::run_manifest(&engine, path, env.with_args(rest))
         }
         other => {
             // Shorthand: a .toml path means `run`.
             if other.ends_with(".toml") {
-                cmds::run_manifest(&engine, other, &args[1..])
+                cmds::run_manifest(
+                    &engine,
+                    other,
+                    cmds::GuestEnv::default().with_args(&args[1..]),
+                )
             } else {
                 cmds::print_help();
                 Err(wasmtime::Error::msg(format!("unknown command `{other}`")))

@@ -934,3 +934,45 @@ fn sha256sum_example_reports_usage_and_errors() {
     let missing = run(&project, &["run", "host.toml", "nope.txt"]);
     assert_eq!(missing.status.code(), Some(2), "{}", stderr(&missing));
 }
+
+/// `--dir` grants a directory the manifest did not, which is what makes a tool
+/// usable on files outside its own project. WASI has no global root, so
+/// without a grant nothing outside the manifest's `root` is readable.
+#[test]
+fn dir_grants_a_directory_to_the_guest() {
+    let _guard = examples_lock();
+    let project = repo().join("examples/sha256sum");
+    let manifest = project.join("host.toml");
+    let manifest = manifest.to_str().expect("utf-8 path");
+
+    // Run from the repository root, naming a file that is not beside the
+    // manifest. Without a grant this fails, and says why.
+    let denied = run(&repo(), &["run", manifest, "AGENTS.md"]);
+    assert_eq!(denied.status.code(), Some(2), "{}", stderr(&denied));
+    let message = stderr(&denied);
+    assert!(message.contains("cannot open AGENTS.md"), "{message}");
+    assert!(message.contains("--dir"), "{message}");
+
+    let granted = run(&repo(), &["run", "--dir", ".", manifest, "AGENTS.md"]);
+    assert!(granted.status.success(), "{}", stderr(&granted));
+    let digest = std::process::Command::new("sha256sum")
+        .arg("AGENTS.md")
+        .current_dir(repo())
+        .output()
+        .expect("sha256sum");
+    let expected = String::from_utf8_lossy(&digest.stdout).into_owned();
+    assert_eq!(stdout(&granted), expected);
+}
+
+/// `--dir` must come before the manifest, so an application never has to
+/// escape its own flags away from the harness's.
+#[test]
+fn dir_without_a_path_is_rejected() {
+    let out = run(&repo(), &["run", "--dir"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("`--dir` needs a directory"),
+        "{}",
+        stderr(&out)
+    );
+}

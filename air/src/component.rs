@@ -65,7 +65,7 @@ pub fn link_all(
     engine: &Engine,
     manifest: &Manifest,
     base: &Path,
-    guest_args: &[String],
+    env: &crate::cmds::GuestEnv,
 ) -> Result<Linked> {
     if !manifest.libs.is_empty() || !manifest.bridges.is_empty() {
         return Err(wasmtime::Error::msg(
@@ -95,8 +95,14 @@ pub fn link_all(
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "app".into()),
     ];
-    argv.extend(guest_args.iter().cloned());
+    argv.extend(env.args.iter().cloned());
     builder.args(&argv);
+    // `--dir <path>` grants one directory, named to the guest exactly as it was
+    // written. A tool that reads whatever file it is pointed at needs this, and
+    // making it explicit is the point: nothing is readable by default.
+    for dir in &env.dirs {
+        builder.preopened_dir(dir, dir, FsPerms::ReadOnly)?;
+    }
     if let Some(root) = &manifest.root {
         let guest = manifest.guest.clone().unwrap_or_else(|| {
             Path::new(root)
@@ -300,7 +306,7 @@ fn entry_of(engine: &Engine, component: &Component, run: &str) -> Result<Entry> 
 /// Validate a component without executing it.
 pub fn check(engine: &Engine, manifest_path: &str, manifest: &Manifest, base: &Path) -> Result<()> {
     // A check never runs the guest, so it needs no guest arguments.
-    let mut linked = link_all(engine, manifest, base, &[])?;
+    let mut linked = link_all(engine, manifest, base, &crate::cmds::GuestEnv::default())?;
     let described = match &linked.entry {
         Entry::Command { instance } => format!("run `{instance}`: command entry ok"),
         Entry::Function { name } => format!("run `{name}`: signature ok"),
@@ -316,8 +322,13 @@ pub fn check(engine: &Engine, manifest_path: &str, manifest: &Manifest, base: &P
 
 /// Execute a component. A command entry's `Err` result is a failed run, which
 /// the process reports as a non-zero exit exactly like a Core `proc_exit`.
-pub fn run(engine: &Engine, manifest: &Manifest, base: &Path, guest_args: &[String]) -> Result<()> {
-    let mut linked = link_all(engine, manifest, base, guest_args)?;
+pub fn run(
+    engine: &Engine,
+    manifest: &Manifest,
+    base: &Path,
+    env: &crate::cmds::GuestEnv,
+) -> Result<()> {
+    let mut linked = link_all(engine, manifest, base, env)?;
     let outcome = match &linked.entry {
         Entry::Command { .. } => command_func(&mut linked).and_then(|func| {
             let (result,) = exit_aware(func.call(&mut linked.store, ()))?;

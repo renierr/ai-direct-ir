@@ -150,7 +150,24 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-pub fn run_manifest(engine: &Engine, path: &str, guest_args: &[String]) -> Result<()> {
+/// What an invocation hands the guest: its arguments, and any directory the
+/// user granted it. Both are host policy -- WASI defines `get-arguments` and
+/// `get-directories`, but not what they answer -- so they arrive from the
+/// command line rather than from the application.
+#[derive(Default)]
+pub struct GuestEnv {
+    pub args: Vec<String>,
+    pub dirs: Vec<String>,
+}
+
+impl GuestEnv {
+    pub fn with_args(mut self, args: &[String]) -> Self {
+        self.args = args.to_vec();
+        self
+    }
+}
+
+pub fn run_manifest(engine: &Engine, path: &str, env: GuestEnv) -> Result<()> {
     let manifest: Manifest = crate::manifest::load(path)?;
     build_if_needed(engine, path, &manifest)?;
     if manifest.target == Target::Browser {
@@ -162,7 +179,7 @@ pub fn run_manifest(engine: &Engine, path: &str, guest_args: &[String]) -> Resul
         return crate::gui::run(engine.clone(), manifest, manifest_base(path));
     }
     if manifest.target == Target::Component {
-        return crate::component::run(engine, &manifest, &manifest_base(path), guest_args);
+        return crate::component::run(engine, &manifest, &manifest_base(path), &env);
     }
     let base = manifest_base(path);
     if manifest.worker_count() > 1 {
