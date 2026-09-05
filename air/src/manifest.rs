@@ -100,7 +100,7 @@ pub struct Bridge {
 }
 
 /// A component whose exports satisfy the application component's imports.
-/// `host-rs` instantiates it and forwards its exported functions at link time,
+/// `air` instantiates it and forwards its exported functions at link time,
 /// so no build-time composition tool is involved. The trade is what ships: the
 /// bundle carries the provider alongside the app rather than one fused
 /// component, and resource handles do not cross the boundary.
@@ -115,7 +115,7 @@ pub struct Provider {
 
 #[derive(Deserialize)]
 pub struct App {
-    /// Optional WAT source assembled by `host-rs build` into `path`.
+    /// Optional WAT source assembled by `air build` into `path`.
     pub source: Option<String>,
     pub path: String,
     pub run: String,

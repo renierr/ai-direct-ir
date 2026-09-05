@@ -1,6 +1,6 @@
 # Static file server: WAT app + WAT lib + Rust bridge, one harness.
 # Paths are relative to THIS file. Run from anywhere:
-#   host-rs examples/server/manifest.toml
+#   air examples/server/manifest.toml
 mode = "server"
 port = 8124
 root = "www"

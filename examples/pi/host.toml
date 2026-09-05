@@ -1,5 +1,5 @@
 # Interactive pi calculator as a WASI 0.2 component.
-# Run from anywhere: echo 100 | host-rs run examples/pi/host.toml
+# Run from anywhere: echo 100 | air run examples/pi/host.toml
 target = "component"
 mode = "command"
 

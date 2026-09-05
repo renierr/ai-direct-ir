@@ -3,10 +3,10 @@
 ## Baseline
 
 ```bash
-host-rs build
-host-rs check
+air build
+air check
 __RUN_COMMAND__
-host-rs dist
+air dist
 ```
 
 ## Automated Checks

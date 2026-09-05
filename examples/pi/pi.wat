@@ -11,8 +11,8 @@
 ;;   (nines/predigit, one digit delay) handles 999.../000... runs.
 ;;   Stream index 0 is a dummy "0", index 1 is "3", rest are fractions.
 ;;
-;; Build: host-rs build examples/pi/pi.toml
-;; Run:   echo 10 | host-rs run examples/pi/pi.toml
+;; Build: air build examples/pi/pi.toml
+;; Run:   echo 10 | air run examples/pi/pi.toml
 ;;
 ;; Memory map (2 pages = 128 KiB):
 ;;   0..7    scratch              16: write result   32: read result

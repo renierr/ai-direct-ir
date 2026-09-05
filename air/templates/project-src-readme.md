@@ -18,11 +18,11 @@ src/
   strings.wat           stable text/data blocks when they need ownership
 ```
 
-`host-rs` expands a standalone line of the form
+`air` expands a standalone line of the form
 `;; @include relative/path.wat` in the root WAT source before assembling. Includes are
 ordered, relative to the including root file, project-local, and textual: their
 combined content must form one valid `(module ...)`. A fragment should not open
-or close the module. Edit a fragment, then use `host-rs check` or `host-rs run`;
+or close the module. Edit a fragment, then use `air check` or `air run`;
 both rebuild when any included fragment is newer than the generated WASM.
 
 Do not split one application into Core WASM modules merely for source

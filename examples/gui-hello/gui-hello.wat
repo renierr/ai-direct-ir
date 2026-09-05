@@ -12,7 +12,7 @@
       (then (global.set $clicks (call $add_one (global.get $clicks)))))
     (call $label (global.get $status.ptr) (global.get $status.len)))
 
-  ;; Named segments: host-rs derives .ptr/.len, so no length is hand-counted.
-  (data $title (i32.const 0) "host-rs GUI proof: egui")
+  ;; Named segments: `air` derives .ptr/.len, so no length is hand-counted.
+  (data $title (i32.const 0) "AIR GUI proof: egui")
   (data $click (i32.const 32) "Click me safely")
   (data $status (i32.const 64) "Click state stays inside WAT"))

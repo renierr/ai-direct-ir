@@ -7,7 +7,7 @@ it current as implementation, active contracts, or next work changes.
 ## Goal
 
 AI-Direct IR lets an AI author application behavior directly in WebAssembly
-Text (WAT). `host-rs` is the generic product: it assembles, validates, links,
+Text (WAT). `air` is the generic product: it assembles, validates, links,
 runs, and packages configured WASM applications. It must not grow a
 library-specific or application-specific API merely because an example needs a
 dependency.
@@ -16,7 +16,7 @@ dependency.
 
 | Repository | Role | Work that belongs there |
 |---|---|---|
-| `ai-direct-ir` | Generic platform and source of truth | `host-rs` runtime, manifest, validation, composition, permissions, lifecycle, packaging, and generic source tooling. |
+| `ai-direct-ir` | Generic platform and source of truth | `air` runtime, manifest, validation, composition, permissions, lifecycle, packaging, and generic source tooling. |
 | `ai-direct-ir-providers` | Reusable dependency catalog (Apache-2.0) | WIT contracts, upstream adapters, reproducible provider artifacts, provenance, licenses, hashes, and conformance tests. |
 | `ai-direct-ir-example-mail` | Consumer and integration driver | WAT application behavior, user flows, state policy, and declared provider consumption. |
 
@@ -34,8 +34,8 @@ tradeoffs, platform limits, and a recommendation.
 
 ## Current Harness State
 
-`host-rs` is version `1.0.2`. It embeds the Rust `wat` parser, so an
-application needs only `host-rs` on `PATH`, whether it is Core WAT or a
+`air` is version `1.0.2`. It embeds the Rust `wat` parser, so an
+application needs only `air` on `PATH`, whether it is Core WAT or a
 component. A manifest does not have to declare `target`: the artifact's
 preamble says whether it is a component (layer `0d 00`) or a Core module
 (layer `01 00`), and an explicit `target` that disagrees is an error rather
@@ -46,7 +46,7 @@ stale root/fragment WAT, validate, then continue.
 `build` assembles, validates, and compiles before it writes. A module that
 fails either step leaves the previous artifact untouched, so a broken `.wasm`
 can never reach `check`, `dist`, or a commit. Assembly and validation errors are
-reported against the fragment file and line the author wrote: `host-rs` owns the
+reported against the fragment file and line the author wrote: `air` owns the
 include expansion, so it is the only component that can translate a parser
 line or a Core function index back to authored source.
 
@@ -94,7 +94,7 @@ order. It may include fragments using a standalone line:
 ;; @include src/views/inbox.wat
 ```
 
-`host-rs` inserts ordered, project-local relative fragments before parsing.
+`air` inserts ordered, project-local relative fragments before parsing.
 Fragments may include further fragments; a cycle is rejected by name. Every
 include path resolves against the *root* source's directory at any depth, so a
 nested fragment reads exactly like a top-level one and never needs `..`. An
@@ -115,7 +115,7 @@ segment moves the count to the harness:
 (data $banner (i32.const 0x1000) "  AI-Direct Mail\n" "  ----\n")
 ```
 
-For every `(data $name (i32.const <addr>) "...")` at module level, `host-rs`
+For every `(data $name (i32.const <addr>) "...")` at module level, `air`
 appends `(global $name.ptr i32 ...)` and `(global $name.len i32 ...)` before
 parsing. The length is the decoded byte count, so `\n`, `\1b`, `\u{25c6}`, and
 literal multi-byte characters all measure correctly; an escape the harness
@@ -157,7 +157,7 @@ allocator above the application's fixed addresses. An unknown word is an error,
 not a silent omission, and a second directive is rejected rather than left to
 fail as a duplicate identifier in generated text.
 
-`host-rs` emits only what was asked for: `exit` alone pulls in neither
+`air` emits only what was asked for: `exit` alone pulls in neither
 `wasi:io/streams` nor `wasi:io/error`, and `stdout` with `stderr` share one
 output stream and one lowered `write`. The generated names are the boundary's
 ABI, so the application can rely on them:
@@ -205,13 +205,13 @@ workflow and environment rules; project behavior belongs in its docs and
 The current harness implementation has been verified with:
 
 ```bash
-cargo fmt --manifest-path host-rs/Cargo.toml --check
-cargo check --manifest-path host-rs/Cargo.toml
-cargo test --manifest-path host-rs/Cargo.toml
+cargo fmt --manifest-path air/Cargo.toml --check
+cargo check --manifest-path air/Cargo.toml
+cargo test --manifest-path air/Cargo.toml
 ./build.sh
 ```
 
-`host-rs/tests/cli.rs` drives the real binary end to end: scaffold, build,
+`air/tests/cli.rs` drives the real binary end to end: scaffold, build,
 check, run; a rejected invalid module with the previous artifact intact;
 assembly and validation errors naming the authored fragment; nested includes;
 rejected cycles, `..` paths, and missing fragments; named data segments
@@ -234,7 +234,7 @@ rebuild.
 
 ## Current Gaps
 
-- No WIT conformance check (`wasm-tools component targets`) in `host-rs`.
+- No WIT conformance check (`wasm-tools component targets`) in `air`.
 - No build-time composition, so a component app ships alongside its providers
   rather than as one fused artifact, and resource handles cannot cross a
   provider boundary.
@@ -246,7 +246,7 @@ rebuild.
 - No project-local component composition. The component text format cannot
   embed a prebuilt `.wasm`, and `wasm-tools compose` is deprecated upstream, so
   the mechanism is an open decision (see Intended Direction).
-- No released provider package or provider resolver/lockfile/`host-rs add`.
+- No released provider package or provider resolver/lockfile/`air add`.
 - No SHA-256 WIT component proof. The provider catalog has a complete format
   specification and zero provider packages.
 - No generic writable WASI data mount, persistence provider, native sidecar, or
@@ -264,7 +264,7 @@ WIT interfaces
   -> WASM Components using WASI 0.2 capabilities
   -> project-owned provider components
   -> generic Component Model composition
-  -> one distributable component plus host-rs
+  -> one distributable component plus air
 ```
 
 The Core `[[libs]]`, `[[bridges]]`, `ui.*`, `web.*`, `term.*`, and `net.*`
@@ -287,7 +287,7 @@ components written entirely as component WAT. They declare the `wasi:io/error`,
 `wasi:cli/exit` interfaces — resources, the `stream-error` variant, and
 `cabi_realloc` for host-allocated `list<u8>` results included — lower them into
 Core functions, run ordinary Core WAT against them, and lift `run` back out as
-`wasi:cli/run@0.2.12`. `host-rs` assembles, validates, instantiates, runs, and
+`wasi:cli/run@0.2.12`. `air` assembles, validates, instantiates, runs, and
 packages them. `wasm-tools validate` and `wasm-tools component wit` agree.
 
 `pi` and `prompts` were converted from Preview 1 with their compute and prompt
@@ -299,7 +299,7 @@ one. It is not effortless: the interface declarations are far heavier than
 Preview 1's flat integer imports, and one construct took real debugging (a
 function signature must reference the *exported* type id, not the local type
 declaration it was defined from, or validation rejects the whole instance). That
-argues for `host-rs` eventually generating the boundary from a `.wit` file the
+argues for `air` eventually generating the boundary from a `.wit` file the
 way it now derives `$name.len` — but it is a convenience, not a prerequisite.
 
 The three converted examples each carry an identical ~60-line WASI boundary,
@@ -309,7 +309,7 @@ directories. That duplication is the clearest evidence for generating it.
 Verified in this tree, with no new dependency:
 
 - `wat 1.258` is pulled with default features, which include `component-model`.
-  `host-rs` can already assemble a `(component ...)` source in-process. A
+  `air` can already assemble a `(component ...)` source in-process. A
   hand-written component WAT encodes, passes `wasm-tools validate --features
   all`, and yields its WIT world through `wasm-tools component wit`.
 - `wasmtime-wasi 48`'s `p1` feature transitively enables `p2`, which enables
@@ -330,7 +330,7 @@ a new import namespace bolted onto the Core path.
 ### Provider Linking, And What Composition Would Still Add
 
 A component app can consume another component today. `[[providers]]` names a
-provider component; `host-rs` instantiates it and forwards its exported
+provider component; `air` instantiates it and forwards its exported
 functions into the application's linker with `LinkerInstance::func_new`. No
 external tool, no new dependency. `examples/provider-demo/` proves it: a string
 crosses consumer to host to provider and back.
@@ -378,7 +378,7 @@ answer.
 every host invents its own import names, and a module only runs where it was
 written to run.
 
-- *WASI Preview 1* (what `host-rs` uses today) is a flat list of POSIX-shaped
+- *WASI Preview 1* (what `air` uses today) is a flat list of POSIX-shaped
   functions on integers: `fd_write`, `fd_read`, `path_open`. It is why
   `examples/hello` prints by storing a pointer and a length at address 0 and
   calling `fd_write`. It works, it is well supported, and it cannot describe
@@ -449,7 +449,7 @@ being specification-only before more specification is written.
   credentials, or private data.
 - Keep the smallest change correct. Preserve compatibility only for a concrete
   active consumer or explicit release commitment.
-- Before claiming completion, run the relevant build, `host-rs check`, target
+- Before claiming completion, run the relevant build, `air check`, target
   behavior check, and distribution check when packaging changes.
 - Never commit or push without an explicit request. Finishing a unit of work is
   not a request. This repeats `AGENTS.md` deliberately: the two must agree.

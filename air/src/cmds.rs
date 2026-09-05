@@ -20,7 +20,7 @@ pub fn print_help() {
             out,
             SetForegroundColor(Color::Cyan),
             SetAttribute(Attribute::Bold),
-            Print("host-rs"),
+            Print("air"),
             SetAttribute(Attribute::Reset),
             ResetColor,
             Print(format!(
@@ -31,14 +31,14 @@ pub fn print_help() {
     } else {
         let _ = writeln!(
             out,
-            "host-rs {} -- build, validate, and run native, browser, GUI, or component WASM projects",
+            "air {} -- build, validate, and run native, browser, GUI, or component WASM projects",
             env!("CARGO_PKG_VERSION")
         );
     }
     help_section(&mut out, color, "USAGE");
     let _ = writeln!(
         out,
-        "  host-rs [command] [args]      use host.toml in a project directory or pass a path"
+        "  air [command] [args]      use host.toml in a project directory or pass a path"
     );
     help_section(&mut out, color, "COMMANDS");
     for (command, description) in [
@@ -82,21 +82,18 @@ pub fn print_help() {
     }
     help_section(&mut out, color, "EXAMPLES");
     for (command, description) in [
+        ("air new myapp", "choose native, browser, GUI, or component"),
+        ("cd myapp && air build", ""),
+        ("air check", "validate host.toml and the compiled app"),
+        ("air dist", "create a shippable dist/ bundle"),
+        ("air run", "native or GUI project"),
+        ("air serve", "browser project"),
         (
-            "host-rs new myapp",
-            "choose native, browser, GUI, or component",
-        ),
-        ("cd myapp && host-rs build", ""),
-        ("host-rs check", "validate host.toml and the compiled app"),
-        ("host-rs dist", "create a shippable dist/ bundle"),
-        ("host-rs run", "native or GUI project"),
-        ("host-rs serve", "browser project"),
-        (
-            "host-rs inspect external-lib.wasm",
+            "air inspect external-lib.wasm",
             "inspect a prebuilt module's ABI",
         ),
         (
-            "host-rs init existing-app.wasm",
+            "air init existing-app.wasm",
             "write a host.toml stub beside it",
         ),
     ] {
@@ -208,7 +205,7 @@ pub fn cmd_build(engine: &Engine, path: &str) -> Result<()> {
 
 /// Assemble only when the declared source is newer than its output, or when the
 /// output is missing. This keeps run/check/dist usable as single commands while
-/// preserving `host-rs build` as the explicit force-rebuild command.
+/// preserving `air build` as the explicit force-rebuild command.
 fn build_if_needed(engine: &Engine, path: &str, manifest: &Manifest) -> Result<()> {
     let base = manifest_base(path);
     build_providers(engine, path, manifest, &base, false)?;
@@ -944,7 +941,7 @@ fn unknown_escape(described: &str) -> wasmtime::Error {
 pub fn cmd_dist(path: &str) -> Result<()> {
     if path == "host.toml" && !std::path::Path::new(path).is_file() {
         return fail(
-            "no host.toml in this directory; run `host-rs dist <manifest.toml>` or change to a project directory"
+            "no host.toml in this directory; run `air dist <manifest.toml>` or change to a project directory"
                 .into(),
         );
     }
@@ -1064,11 +1061,7 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             manifest_out.insert("bridges".into(), toml::Value::Array(bridges));
         }
         let executable = std::env::current_exe()?;
-        let host_name = if cfg!(windows) {
-            "host-rs.exe"
-        } else {
-            "host-rs"
-        };
+        let host_name = if cfg!(windows) { "air.exe" } else { "air" };
         std::fs::copy(executable, dist.join(host_name))?;
     } else {
         for name in ["index.html", "web-host.js"] {
@@ -1158,7 +1151,7 @@ pub fn cmd_serve(path: &str) -> Result<()> {
     let manifest = crate::manifest::load(path)?;
     if manifest.target != Target::Browser {
         return fail(format!(
-            "{path} targets native; `host-rs serve` is for browser apps"
+            "{path} targets native; `air serve` is for browser apps"
         ));
     }
     let base = std::fs::canonicalize(manifest_base(path))?;
@@ -1586,17 +1579,17 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
         Target::Component => component_starter(name),
         Target::Native => {
             let starter = format!(
-                ";; {name}.wat — {name} app, hosted by host-rs.\n\
-         ;; Build: host-rs build\n\
-         ;; Check: host-rs check\n\
-         ;; Run:   host-rs run\n\
+                ";; {name}.wat — {name} app, hosted by air.\n\
+         ;; Build: air build\n\
+         ;; Check: air check\n\
+         ;; Run:   air run\n\
          ;;\n\
          ;; Command-mode contract: own memory (export it for WASI),\n\
          ;; WASI stdio, `_start` entry, `proc_exit` code is the exit code.\n\
          ;; Need sockets, shared libs, or bridges? New needs go in the\n\
          ;; manifest (TOML), never in harness code.\n\
          ;;\n\
-         ;; A named data segment gets $name.ptr and $name.len from host-rs.\n\
+         ;; A named data segment gets $name.ptr and $name.len from air.\n\
          ;; Never write a string length by hand: it silently goes stale.\n\
          \n\
          (module\n\
@@ -1624,7 +1617,7 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
             );
             let manifest = format!(
                 "# {name}: command-mode app. Build, check, then run:\n\
-         #   host-rs build && host-rs check && host-rs run\n\
+         #   air build && air check && air run\n\
          mode = \"command\"\n\
          \n\
          [app]\n\
@@ -1709,11 +1702,11 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
     };
     println!(
         "created {name}/:\n  {name}.wat\n  {name}.wasm\n  host.toml\n  README.md\n  AGENTS.md\n  docs/\n  src/\n  .agents/skills/ai-direct-ir/\n  .gitignore{extra}\n\
-         next:\n  cd {name} && host-rs check{}",
+         next:\n  cd {name} && air check{}",
         if target == Target::Browser {
-            " && host-rs serve"
+            " && air serve"
         } else {
-            " && host-rs run"
+            " && air run"
         }
     );
     Ok(())
@@ -1727,33 +1720,33 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
     {
         (
             "browser",
-            "host-rs serve",
-            "`host-rs serve` hosts this directory at a localhost URL with the required\nWASM MIME type. Open that URL in a browser. `host-rs run` is not used for\nbrowser projects. `host-rs dist` contains `index.html`, `web-host.js`, and the\ncompiled application; deploy that directory to any static web host.",
+            "air serve",
+            "`air serve` hosts this directory at a localhost URL with the required\nWASM MIME type. Open that URL in a browser. `air run` is not used for\nbrowser projects. `air dist` contains `index.html`, `web-host.js`, and the\ncompiled application; deploy that directory to any static web host.",
             "| `index.html` | The page containing the application canvas. |\n| `web-host.js` | Trusted browser runtime that implements the `web.*` imports. |",
             "The module exports `start()` (the `[app].run` entry). It may import only the\ndeclared `web.*` functions implemented in `web-host.js`: Canvas dimensions,\n`clear`, `fill_rect`, keyboard state, pointer coordinates, and frame scheduling.\nIf it imports `request_frame()`, it must export `frame()`. `web-host.js` owns\nbrowser events and drawing effects; WAT owns application state and behavior.",
-            "Use `host-rs serve` and test the result in a browser",
+            "Use `air serve` and test the result in a browser",
             "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `net.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
         )
     } else if *target == Target::Gui {
         (
             "native GUI",
-            "host-rs run",
-            "`host-rs run` opens the native egui window and calls the configured entry once per UI frame. `host-rs dist` contains the executable, manifest, and compiled application.",
+            "air run",
+            "`air run` opens the native egui window and calls the configured entry once per UI frame. `air dist` contains the executable, manifest, and compiled application.",
             "",
             "The module exports a zero-argument frame function. It may import built-in capabilities such as `ui.*` and any project-declared `[[libs]]` or `[[bridges]]` provider. WAT owns state; the host renders the built-in controls using egui. Read `docs/PROJECT.md` before changing a built-in import.",
-            "Run `host-rs run`, interact with the window, and confirm expected state changes",
+            "Run `air run`, interact with the window, and confirm expected state changes",
             "- `ui.label(ptr, len)` and `ui.button(ptr, len) -> i32` are built-in GUI conveniences, not a limit on application dependencies. Add Core WASM providers through `[[libs]]` or `[[bridges]]`; their exports can use any namespace.
 - The entry runs once per UI frame. Button clicks are returned on the following frame; retain application state in WAT globals or memory.
-- `host-rs check` links the complete declared graph. An unresolved import is an integration error, not a reason to add an application-specific harness API.",
+- `air check` links the complete declared graph. An unresolved import is an integration error, not a reason to add an application-specific harness API.",
         )
     } else {
         (
             "native",
-            "host-rs run",
-            "`host-rs run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime. `host-rs dist`\ncontains the `host-rs` executable, a rewritten local `host.toml`, the app,\ndeclared WASM dependencies, and any configured `root` data directory.",
+            "air run",
+            "`air run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime. `air dist`\ncontains the `air` executable, a rewritten local `host.toml`, the app,\ndeclared WASM dependencies, and any configured `root` data directory.",
             "",
             "Command applications normally export `_start()` and can use declared WASI\nstdio/files and optional `term.*` terminal calls. Server applications use\n`mode = \"server\"` and an entry such as `run(port)` or `handle(cfd)` with\n`workers = N`. Only imports implemented by the native host and configured in\n`host.toml` are available.",
-            "Run `host-rs run` and exercise the expected CLI or server behavior",
+            "Run `air run` and exercise the expected CLI or server behavior",
             "- `mode = \"command\"`: keep a plain stdio path; use `term.*` only after\n  checking `term.available` so pipes and CI still work.\n- `mode = \"server\"`: document socket and buffer ownership. Use `workers = N`\n  only when the entry handles one accepted connection.\n- Browser `web.*` imports, `index.html`, and `web-host.js` do not exist for this\n  target. A browser UI is a separate browser project.",
         )
     };
@@ -1886,8 +1879,8 @@ fn select_target() -> Result<Target> {
 fn browser_starter(name: &str) -> (String, String) {
     let starter = format!(
         ";; {name}.wat -- Canvas app hosted by web-host.js.\n\
-         ;; Build: host-rs build\n\
-         ;; Check: host-rs check\n\
+         ;; Build: air build\n\
+         ;; Check: air check\n\
          ;; Run: serve this directory and open index.html.\n\
          ;; web.* is the browser ABI: keep app state in WASM and drawing explicit.\n\
          \n\
@@ -1914,7 +1907,7 @@ fn browser_starter(name: &str) -> (String, String) {
     (starter, manifest)
 }
 
-/// A WASI 0.2 command component, authored as component WAT. `host-rs` assembles
+/// A WASI 0.2 command component, authored as component WAT. `air` assembles
 /// it in-process: the component path needs no bindings generator and no
 /// language toolchain, exactly like the Core path.
 fn component_starter(name: &str) -> (String, String) {
@@ -1934,9 +1927,9 @@ fn component_starter(name: &str) -> (String, String) {
 
 fn gui_starter(name: &str) -> (String, String) {
     let starter = format!(
-        ";; {name}.wat -- native egui app hosted by host-rs.\n\
+        ";; {name}.wat -- native egui app hosted by air.\n\
          ;; The entry runs every UI frame. Strings are UTF-8 in env.memory.\n\
-         ;; A named data segment gets $name.ptr and $name.len from host-rs, so\n\
+         ;; A named data segment gets $name.ptr and $name.len from air, so\n\
          ;; no string length is ever written by hand.\n\
          (module\n\
           \x20 (import \"env\" \"memory\" (memory 1))\n\

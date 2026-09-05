@@ -1,7 +1,7 @@
 # Same modules as manifest.toml, but the HOST owns the accept loop:
 # N worker threads, each with a fully linked instance, run `handle`
 # per connection. Same server.wasm — only the entry differs.
-#   host-rs examples/server/mt.toml   # :8124, 8 workers
+#   air examples/server/mt.toml   # :8124, 8 workers
 mode = "server"
 port = 8124
 root = "www"

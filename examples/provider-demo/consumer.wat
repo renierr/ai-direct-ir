@@ -1,5 +1,5 @@
 ;; A consumer component: imports ai-direct:demo/text and prints the result.
-;; host-rs satisfies that import by forwarding into the provider component.
+;; air satisfies that import by forwarding into the provider component.
 
 (component
   ;; @wasi stdout

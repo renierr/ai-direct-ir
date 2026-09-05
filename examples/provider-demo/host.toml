@@ -1,6 +1,6 @@
 # A component consuming another component's interface.
 #
-# host-rs instantiates provider.wasm and forwards its exported functions into
+# air instantiates provider.wasm and forwards its exported functions into
 # consumer.wasm's imports at link time. No build-time composition tool is
 # involved; the trade is that the bundle ships both components rather than one
 # fused artifact, and resource handles do not cross the boundary.

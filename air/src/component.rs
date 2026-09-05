@@ -158,7 +158,7 @@ fn add_term_to_linker(linker: &mut Linker<Host>) -> Result<()> {
 /// functions into the application's linker.
 ///
 /// This is runtime linking, not build-time composition: the application still
-/// imports the provider's interface, and `host-rs` satisfies that import by
+/// imports the provider's interface, and `air` satisfies that import by
 /// calling into an already-instantiated provider. It needs no external
 /// composer. What it does not do is fuse the two into one distributable
 /// component, and handles cannot cross the boundary, because each instance

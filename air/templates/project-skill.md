@@ -1,6 +1,6 @@
 ---
 name: ai-direct-ir
-description: Work safely with AI-Direct IR WAT, WASM, WIT, providers, and host-rs projects.
+description: Work safely with AI-Direct IR WAT, WASM, WIT, providers, and AIR projects.
 ---
 
 # AI-Direct IR Skill
@@ -10,21 +10,21 @@ provider, or its WIT/Component Model integration.
 
 ## Environment
 
-- Every project needs only `host-rs` on `PATH`. It assembles and validates both
+- Every project needs only `air` on `PATH`. It assembles and validates both
   Core WAT and component WAT in-process; do not add WABT, `wit-bindgen`, or a
   language toolchain merely to build an application.
 - **Prefer `target = "component"` (WASI 0.2) for new work.** Preview 1 (`target
   = "native"`) remains supported and is still required for raw-mode terminals,
   the `net.*` sockets ABI, `ui.*`, and `[[libs]]`/`[[bridges]]` providers.
-- `host-rs check`, target run, and `host-rs dist` rebuild a declared root WAT
+- `air check`, target run, and `air dist` rebuild a declared root WAT
   source when it or an included fragment is newer than the generated WASM.
-  `host-rs build` forces a rebuild.
-- `host-rs build` assembles, validates, and compiles before writing. A failed
+  `air build` forces a rebuild.
+- `air build` assembles, validates, and compiles before writing. A failed
   build leaves the previous artifact in place; errors name the fragment file and
   line you wrote, not the expanded text. Progress goes to stderr.
 - Never hand-write a string's byte length. Name the data segment --
   `(data $msg (i32.const 0x1000) "...")` -- and read `$msg.ptr` / `$msg.len`,
-  which host-rs derives from the segment. A named segment needs a literal
+  which `air` derives from the segment. A named segment needs a literal
   offset and may not overlap another. Unnamed segments are unchanged.
 - `wasm-tools` is an optional cross-check, never required to build an app. Use
   `validate`, `component wit`, and `component targets`; do not place it in an
@@ -86,7 +86,7 @@ source = "provider.wat"
 path = "provider.wasm"
 ```
 
-`host-rs` instantiates the provider and forwards its exports into your imports.
+`air` instantiates the provider and forwards its exports into your imports.
 Plain values cross freely; resource handles do not, because each component
 instance owns its own table. The project's own capabilities arrive the same
 way: `ai-direct:host/term` is the terminal, imported exactly like a WASI
@@ -116,7 +116,7 @@ Read the WIT for an interface before declaring it. It ships with Wasmtime:
   a source-file organization technique. Do not modify the harness merely
   because one application needs a library.
 - `target = "component"` runs a WASM component on WASI 0.2. Its source is a
-  `(component ...)` WAT that host-rs assembles in-process; no bindings
+  `(component ...)` WAT that `air` assembles in-process; no bindings
   generator and no language toolchain are involved. Ask for the WASI boundary
   with `;; @wasi <capabilities>`, write the logic in an ordinary
   `(core module ...)`, and lift the entry with `canon lift`.
@@ -134,8 +134,8 @@ Read the WIT for an interface before declaring it. It ships with Wasmtime:
 
 1. Update specification for behavior, architecture for state/capability/trust
    decisions, and verification for proof before claiming a feature complete.
-2. Run `host-rs check`, then the target's observable manual or automated check.
-3. Run `host-rs dist` for distribution-affecting work.
+2. Run `air check`, then the target's observable manual or automated check.
+3. Run `air dist` for distribution-affecting work.
 
 Never commit generated `.wasm`, `dist/`, `.env`, private data, credentials, or
 unreviewed provider caches.

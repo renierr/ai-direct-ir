@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Build the host-rs harness executable. The current platform is the default.
+# Build the air harness executable. The current platform is the default.
 set -euo pipefail
 
 usage() {
   printf '%s\n' \
     'Usage: ./build.sh [--target <triple>]' \
     '' \
-    'Builds the optimized host-rs harness executable with Cargo.' \
+    'Builds the optimized air harness executable with Cargo.' \
     '' \
     'Examples:' \
     '  ./build.sh' \
     '  ./build.sh --target x86_64-pc-windows-gnu' \
     '' \
     'Artifacts:' \
-    '  dist/host-rs' \
-    '  dist/<triple>/host-rs[.exe]' \
+    '  dist/air' \
+    '  dist/<triple>/air[.exe]' \
     '' \
     'Cross-compilation requires that the requested Rust target and its native linker' \
     'are already installed. This script never installs them. For Windows GNU builds' \
@@ -51,16 +51,16 @@ if [[ -n "$target" ]]; then
     printf 'Rust target %q is not installed. Install it explicitly, then rerun this command.\n' "$target" >&2
     exit 1
   fi
-  cargo build --manifest-path host-rs/Cargo.toml --release --target "$target"
+  cargo build --manifest-path air/Cargo.toml --release --target "$target"
   mkdir -p "dist/$target"
-  executable="host-rs"
+  executable="air"
   if [[ "$target" == *windows* ]]; then
-    executable="host-rs.exe"
+    executable="air.exe"
   fi
-  cp "host-rs/target/$target/release/$executable" "dist/$target/$executable"
+  cp "air/target/$target/release/$executable" "dist/$target/$executable"
   printf 'built dist/%s/%s\n' "$target" "$executable"
 else
-  cargo build --manifest-path host-rs/Cargo.toml --release
-  cp host-rs/target/release/host-rs dist/host-rs
-  printf 'built dist/host-rs\n'
+  cargo build --manifest-path air/Cargo.toml --release
+  cp air/target/release/air dist/air
+  printf 'built dist/air\n'
 fi

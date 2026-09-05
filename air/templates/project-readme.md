@@ -17,14 +17,14 @@ requirements only in source comments or dependency details only in prose.
 
 ## Develop
 
-Prerequisite: `host-rs` must be on `PATH`. It assembles and validates WAT
+Prerequisite: `air` must be on `PATH`. It assembles and validates WAT
 in-process; no separate WAT compiler is required.
 
 ```bash
-host-rs build
-host-rs check
+air build
+air check
 __RUN_COMMAND__
-host-rs dist
+air dist
 ```
 
 `build` always writes the `[app].path` artifact from `[app].source`. `check`,

@@ -1,6 +1,6 @@
 ;; hello-comp.wat -- a WASI 0.2 command component.
 ;;
-;; `;; @wasi stdout` is the whole Component Model boundary: host-rs generates
+;; `;; @wasi stdout` is the whole Component Model boundary: `air` generates
 ;; the interface imports, the shared memory and the canonical ABI lowering, so
 ;; the application below is ordinary Core WAT. Add capabilities to that line as
 ;; the program needs them (`stdin`, `stderr`, `exit`), and size the memory with

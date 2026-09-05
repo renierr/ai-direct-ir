@@ -19,33 +19,33 @@ fn examples_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn host_rs() -> &'static str {
-    env!("CARGO_BIN_EXE_host-rs")
+fn air_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_air")
 }
 
 /// Repository root: the harness crate lives one level below it.
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("host-rs/ has a parent")
+        .expect("air/ has a parent")
         .to_path_buf()
 }
 
 /// A clean directory per test. Tests run in parallel, so the name must be
 /// unique per test function.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("host-rs-tests").join(name);
+    let dir = std::env::temp_dir().join("air-tests").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     dir
 }
 
 fn run(dir: &Path, args: &[&str]) -> Output {
-    Command::new(host_rs())
+    Command::new(air_bin())
         .args(args)
         .current_dir(dir)
         .output()
-        .expect("spawn host-rs")
+        .expect("spawn air")
 }
 
 fn stdout(out: &Output) -> String {
@@ -64,21 +64,21 @@ fn scaffold(name: &str) -> PathBuf {
 /// Scaffold a project for `target` in a fresh directory and return its dir.
 fn scaffold_target(name: &str, target: &str) -> PathBuf {
     let dir = scratch(name);
-    let mut child = Command::new(host_rs())
+    let mut child = Command::new(air_bin())
         .args(["new", "app"])
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn host-rs new");
+        .expect("spawn air new");
     child
         .stdin
         .as_mut()
         .expect("stdin")
         .write_all(format!("{target}\n").as_bytes())
         .expect("choose the target");
-    let out = child.wait_with_output().expect("host-rs new finished");
+    let out = child.wait_with_output().expect("air new finished");
     assert!(out.status.success(), "new failed: {}", stderr(&out));
     dir.join("app")
 }
@@ -261,7 +261,7 @@ fn repository_examples_check() {
 #[test]
 fn prompts_example_runs_scripted() {
     let _shared = examples_lock();
-    let mut child = Command::new(host_rs())
+    let mut child = Command::new(air_bin())
         .args(["run", "examples/prompts/host.toml"])
         .current_dir(repo())
         .stdin(Stdio::piped())
@@ -287,7 +287,7 @@ fn prompts_example_runs_scripted() {
 #[test]
 fn pi_example_prints_the_requested_digits() {
     let _shared = examples_lock();
-    let mut child = Command::new(host_rs())
+    let mut child = Command::new(air_bin())
         .args(["run", "examples/pi/host.toml"])
         .current_dir(repo())
         .stdin(Stdio::piped())
@@ -539,7 +539,7 @@ fn component_distribution_bundles_the_host() {
     let out = run(&project, &["dist"]);
     assert!(out.status.success(), "dist failed: {}", stderr(&out));
     let dist = project.join("dist");
-    for name in ["host-rs", "host.toml", "app.wasm"] {
+    for name in ["air", "host.toml", "app.wasm"] {
         assert!(dist.join(name).is_file(), "dist is missing {name}");
     }
     let manifest = std::fs::read_to_string(dist.join("host.toml")).expect("read dist manifest");

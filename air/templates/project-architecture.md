@@ -4,7 +4,7 @@
 
 Keep application policy, state transitions, and presentation behavior in WAT.
 Use providers for mature implementations such as storage, protocols, codecs,
-and platform integration. Do not change `host-rs` merely because this app needs
+and platform integration. Do not change `air` merely because this app needs
 a library.
 
 ## Source Structure

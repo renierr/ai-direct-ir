@@ -1,5 +1,5 @@
 [package]
-name = "host-rs"
+name = "air"
 version = "1.0.2"
 edition = "2024"
 

@@ -4,7 +4,7 @@
 !examples/**/*.wasm
 native/gen/
 native/*-native
-host-rs/target/
+air/target/
 dist/
 libs/**/target/
 libs/**/Cargo.lock

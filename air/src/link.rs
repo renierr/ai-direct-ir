@@ -17,7 +17,7 @@ use crate::net;
 use crate::term;
 
 /// Resolve a manifest path: manifest dir wins, CWD is the fallback, so both
-/// `host-rs srv/manifest.toml` from the root and from anywhere else work.
+/// `air srv/manifest.toml` from the root and from anywhere else work.
 pub fn join(base: &Path, p: &str) -> PathBuf {
     let q = Path::new(p);
     if q.is_absolute() {

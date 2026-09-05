@@ -9,7 +9,7 @@ use crate::manifest::Manifest;
 
 pub fn run(engine: Engine, manifest: Manifest, base: std::path::PathBuf) -> Result<()> {
     let linked = link_all(&engine, &manifest, &base)?;
-    let title = format!("host-rs: {}", manifest.app.path);
+    let title = format!("air: {}", manifest.app.path);
     let entry = manifest.app.run;
     eframe::run_native(
         &title,

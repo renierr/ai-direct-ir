@@ -3,7 +3,7 @@
 This is a __TARGET_NAME__ WebAssembly application. Work on the application in
 this directory; target runtime details below are part of its contract.
 
-The files created by `host-rs new` are a minimal working example, not a fixed
+The files created by `air new` are a minimal working example, not a fixed
 product. Replace the starter behavior, layout, and data as needed for the
 requested application while preserving the target runtime contract.
 
@@ -29,10 +29,10 @@ secrets, generated output, and local provider caches out of source control.
 ## Rules
 
 - Never install, upgrade, or remove software without explicit user consent.
-- Change source, not `__APPNAME__.wasm`; `host-rs check`, the run command, and
-  `host-rs dist` rebuild automatically after WAT edits. Use `host-rs build` to
+- Change source, not `__APPNAME__.wasm`; `air check`, the run command, and
+  `air dist` rebuild automatically after WAT edits. Use `air build` to
   force a rebuild.
-- Run `host-rs check` before claiming an integration works.
+- Run `air check` before claiming an integration works.
 - __VERIFY_ACTION__ before claiming user-visible behavior works.
 - Keep `docs/01-spec.md` current with requested behavior and acceptance
   criteria. Record state/provider/capability decisions in
@@ -42,7 +42,7 @@ secrets, generated output, and local provider caches out of source control.
   memory ownership are ABI, not incidental implementation details.
 - Read `docs/PROJECT.md` in the harness repository before changing a
   built-in host import. Add application dependencies as declared `[[libs]]` or
-  `[[bridges]]`; their namespaces and exports are project-owned. `host-rs
+  `[[bridges]]`; their namespaces and exports are project-owned. `air
   check` proves the complete declared module graph links.
 - Keep generated `.wasm` out of source control unless this application
   deliberately distributes it.
@@ -52,10 +52,10 @@ secrets, generated output, and local provider caches out of source control.
 ## Workflow
 
 ```bash
-host-rs build
-host-rs check
+air build
+air check
 __RUN_COMMAND__
-host-rs dist
+air dist
 ```
 
 `dist` builds declared WAT source and checks the result before packaging. Run

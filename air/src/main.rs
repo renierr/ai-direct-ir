@@ -1,4 +1,4 @@
-//! host-rs: link + host configured WASM apps. See docs/PROJECT.md.
+//! air: link + host configured WASM apps. See docs/PROJECT.md.
 
 mod boundary;
 mod cmds;
@@ -31,12 +31,12 @@ fn main() -> Result<()> {
             Ok(())
         }
         "version" | "-V" | "--version" => {
-            println!("host-rs {}", env!("CARGO_PKG_VERSION"));
+            println!("air {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         "inspect" => {
             if arg1.is_empty() {
-                return usage_err("missing module", "host-rs inspect <module.wasm>");
+                return usage_err("missing module", "air inspect <module.wasm>");
             }
             cmds::cmd_inspect(&engine, arg1)
         }
@@ -59,13 +59,13 @@ fn main() -> Result<()> {
         }
         "init" => {
             if arg1.is_empty() {
-                return usage_err("missing app module", "host-rs init <app.wasm>");
+                return usage_err("missing app module", "air init <app.wasm>");
             }
             cmds::cmd_init(&engine, arg1)
         }
         "new" => {
             if arg1.is_empty() {
-                return usage_err("missing project name", "host-rs new <name>");
+                return usage_err("missing project name", "air new <name>");
             }
             cmds::cmd_new(&engine, arg1)
         }
