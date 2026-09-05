@@ -466,10 +466,10 @@ conformance suite lives in the catalog and covers ten cases plus a
 cross-check against Python's `unicodedata`.
 
 Fresh component, browser and GUI scaffolds have completed their applicable
-`new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
-runs from its root `mail.wat` plus `src/state.wat` and
+`new`, `check`, `run`/`serve`, and `dist` flows. The mail example is a
+component: it builds and runs from its root `mail.wat` plus `src/state.wat` and
 `src/views/inbox.wat`; changing an included fragment triggers an automatic
-rebuild.
+rebuild, and its packaged bundle runs under `env -i PATH=/var/empty`.
 
 ## Current Gaps
 
@@ -499,9 +499,9 @@ rebuild.
   provider. See Retiring The Core Path.
 - No generic writable WASI data mount, persistence provider, native sidecar, or
   browser provider composition.
-- The mail example remains a Core WASI Preview 1 mock inbox. It has proposed
-  WIT contracts only; no SQLite, IMAP/JMAP, SMTP, TLS, TUI, secrets, account,
-  or real mailbox data is present.
+- The mail example is a component but still a mock inbox. It has proposed WIT
+  contracts only; no SQLite, IMAP/JMAP, SMTP, TLS, TUI, secrets, account, or
+  real mailbox data is present.
 
 ## Intended Direction
 
@@ -1095,21 +1095,18 @@ being specification-only before more specification is written.
    and growing past one page, still wait on an application that states the
    requirement — a long-lived collection rather than a per-request buffer.
    Grow the mail example far enough to state it.
-3. Convert the mail example to a component. It is the last Core WASI Preview 1
-   application anywhere in the three repositories, and the native host it runs
-   on no longer exists -- see Retiring The Core Path. Nothing in it needs a
-   Core mechanism: it is stdio, a mock inbox in memory, and included fragments.
-4. Decide build-time composition only when a released provider needs a single
+3. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing. See Provider Linking above. Converting
    `examples/server/` did not need it: source libs `;; @include`, and a
    compiled one was already a provider component.
-5. Add a separate component consumer proof in the mail example. Do not force
-   the existing Core WAT app to call a WIT component without an explicit
-   component boundary.
-6. After the component path works end to end, present SQLite candidates for
+4. Add a provider consumer proof in the mail example. It is a component now,
+   so this is a `[[providers]]` entry and an imported interface, not a
+   boundary problem -- what it proves is the contract shape before a
+   consequential dependency is chosen.
+5. After the component path works end to end, present SQLite candidates for
    approval; only then add a generic writable data capability and a
    `mail-store` provider.
-7. Keep a standing check on WASI 0.3 rather than scheduling it. See WASI 0.3,
+6. Keep a standing check on WASI 0.3 rather than scheduling it. See WASI 0.3,
    And Why Not Yet for the state of the implementation and the conditions that
    would turn it into real work.
 
