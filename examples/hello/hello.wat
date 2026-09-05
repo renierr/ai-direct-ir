@@ -1,9 +1,9 @@
 ;; hello.wat -- the smallest AI-direct IR app: a WASI 0.2 component that
 ;; writes one line to stdout.
 ;;
-;; Everything below is hand-written WAT. The Component Model boundary needs
-;; no bindings generator and no language toolchain; host-rs assembles this
-;; source in-process.
+;; `;; @wasi stdout` is the whole Component Model boundary. host-rs generates
+;; the imports, the shared memory and the canonical ABI lowering from it, and
+;; hands the application ordinary Core functions on the `wasi` instance.
 ;;
 ;; Build: host-rs build examples/hello/host.toml
 ;; Run:   host-rs run examples/hello/host.toml
@@ -12,61 +12,7 @@
 ;;                      0x8000+ canonical ABI bump allocation
 
 (component
-  ;; --- WASI 0.2 boundary ------------------------------------------------
-  ;; Written by hand: declaring the interfaces, lowering them into Core
-  ;; functions, and lifting the entry point back out is all the Component
-  ;; Model boundary is. No bindings generator is involved.
-  ;;
-  ;; A function signature must reference the *exported* type id (`$sexp`),
-  ;; not the local type it was defined from, or validation rejects the
-  ;; whole instance.
-  (import "wasi:io/error@0.2.12" (instance $io-error
-    (export "error" (type (sub resource)))))
-  (alias export $io-error "error" (type $error))
-
-  (import "wasi:io/streams@0.2.12" (instance $streams
-    (export "error" (type $ie (eq $error)))
-    (export "output-stream" (type $os (sub resource)))
-    (type $se (variant (case "last-operation-failed" (own $ie)) (case "closed")))
-    (export "stream-error" (type $sexp (eq $se)))
-    (export "[method]output-stream.blocking-write-and-flush"
-      (func (param "self" (borrow $os)) (param "contents" (list u8))
-            (result (result (error $sexp)))))))
-  (alias export $streams "output-stream" (type $ostream))
-  (alias export $streams "[method]output-stream.blocking-write-and-flush" (func $write))
-
-  (import "wasi:cli/stdout@0.2.12" (instance $stdout
-    (export "output-stream" (type (eq $ostream)))
-    (export "get-stdout" (func (result (own $ostream))))))
-  (alias export $stdout "get-stdout" (func $get-stdout))
-
-  ;; --- shared memory ----------------------------------------------------
-  ;; Lowering an import needs the memory; the logic module needs the lowered
-  ;; imports. A separate memory module breaks that cycle.
-  (core module $mem-mod
-    (memory (export "memory") 1)
-    (global $bump (mut i32) (i32.const 0x8000))
-    ;; The canonical ABI allocates host-produced values here. A bump
-    ;; allocator is enough: this program never frees.
-    (func (export "cabi_realloc")
-      (param $old i32) (param $old_size i32) (param $align i32) (param $new i32)
-      (result i32)
-      (local $ptr i32)
-      (global.set $bump
-        (i32.and (i32.add (global.get $bump) (i32.sub (local.get $align) (i32.const 1)))
-                 (i32.xor (i32.sub (local.get $align) (i32.const 1)) (i32.const -1))))
-      (local.set $ptr (global.get $bump))
-      (global.set $bump (i32.add (global.get $bump) (local.get $new)))
-      (local.get $ptr)))
-  (core instance $mem (instantiate $mem-mod))
-  (alias core export $mem "memory" (core memory $memory))
-  (alias core export $mem "cabi_realloc" (core func $realloc))
-
-  (core func $get-stdout-l (canon lower (func $get-stdout)))
-  (core func $write-l (canon lower (func $write) (memory $memory) (realloc $realloc)))
-  (core instance $wasi
-    (export "get-stdout" (func $get-stdout-l))
-    (export "write" (func $write-l)))
+  ;; @wasi stdout
 
   ;; --- application logic, ordinary Core WAT -----------------------------
   (core module $main

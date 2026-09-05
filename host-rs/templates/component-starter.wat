@@ -1,40 +1,16 @@
-;; hello-comp.wat -- a WASI 0.2 command component, written by hand in WAT.
-;; Proves an AI can author the Component Model boundary with no bindings
-;; generator and no language toolchain: host-rs assembles this directly.
+;; hello-comp.wat -- a WASI 0.2 command component.
+;;
+;; `;; @wasi stdout` is the whole Component Model boundary: host-rs generates
+;; the interface imports, the shared memory and the canonical ABI lowering, so
+;; the application below is ordinary Core WAT. Add capabilities to that line as
+;; the program needs them (`stdin`, `stderr`, `exit`), and size the memory with
+;; `pages=` / `heap=`.
+;;
+;; Memory map (1 page): 0x100 message, 0x200 stream result,
+;;                      0x8000+ canonical ABI bump allocation
 
 (component
-  ;; --- imported WASI 0.2 interfaces -------------------------------------
-  (import "wasi:io/error@0.2.12" (instance $io-error
-    (export "error" (type (sub resource)))))
-  (alias export $io-error "error" (type $error))
-
-  (import "wasi:io/streams@0.2.12" (instance $streams
-    (export "error" (type $ie (eq $error)))
-    (export "output-stream" (type $os (sub resource)))
-    (type $se (variant (case "last-operation-failed" (own $ie)) (case "closed")))
-    (export "stream-error" (type $sexp (eq $se)))
-    (export "[method]output-stream.blocking-write-and-flush"
-      (func (param "self" (borrow $os)) (param "contents" (list u8))
-            (result (result (error $sexp)))))))
-  (alias export $streams "output-stream" (type $ostream))
-  (alias export $streams "[method]output-stream.blocking-write-and-flush" (func $write))
-
-  (import "wasi:cli/stdout@0.2.12" (instance $stdout
-    (export "output-stream" (type (eq $ostream)))
-    (export "get-stdout" (func (result (own $ostream))))))
-  (alias export $stdout "get-stdout" (func $get-stdout))
-
-  ;; --- memory lives in its own core module ------------------------------
-  ;; Lowering an import needs the memory, and the main module needs the
-  ;; lowered imports. Sharing one memory module breaks that cycle.
-  (core module $mem-mod (memory (export "memory") 1))
-  (core instance $mem (instantiate $mem-mod))
-  (alias core export $mem "memory" (core memory $memory))
-
-  (core func $get-stdout-lowered (canon lower (func $get-stdout)))
-  (core func $write-lowered (canon lower (func $write) (memory $memory)))
-  (core instance $wasi (export "get-stdout" (func $get-stdout-lowered))
-                       (export "write" (func $write-lowered)))
+  ;; @wasi stdout
 
   ;; --- application logic, ordinary Core WAT -----------------------------
   (core module $main
@@ -42,16 +18,17 @@
     (import "wasi" "get-stdout" (func $get-stdout (result i32)))
     (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
 
-    ;; result<_, stream-error> is returned through a 8-byte area at 0x200.
+    ;; Name the segment and read $msg.ptr / $msg.len; never count bytes.
+    (data $msg (i32.const 0x100) "hello from __NAME__\n")
+
+    ;; result<_, stream-error> is returned through the 8 bytes at 0x200.
+    ;; 0 = ok, 1 = err: forward the stream result as the run result.
     (func (export "run") (result i32)
       (call $write
         (call $get-stdout)
         (global.get $msg.ptr) (global.get $msg.len)
         (i32.const 0x200))
-      ;; 0 = ok, 1 = err: forward the stream result as the run result.
       (i32.load (i32.const 0x200)))
-
-    (data $msg (i32.const 0x100) "hello from __NAME__\n")
   )
   (core instance $app (instantiate $main
     (with "env" (instance $mem))
