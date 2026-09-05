@@ -2,10 +2,13 @@
 
 use serde::Deserialize;
 
+/// How the host enters an application. `server` retired with the `net.*`
+/// syscalls: a component owns its own accept loop through `wasi:sockets`, so
+/// there is nothing left for a host-owned one to do. A manifest that still
+/// says `mode = "server"` fails to parse, which is the right way to find out.
 #[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    Server,
     Command,
 }
 
@@ -144,12 +147,11 @@ pub struct Manifest {
     #[serde(skip)]
     pub target: Target,
     pub mode: Mode,
+    /// Only `air serve` reads this now; the retired server mode used it too.
     pub port: Option<u16>,
     pub root: Option<String>,
     pub guest: Option<String>,
     pub memory_pages: Option<u32>,
-    #[serde(default)]
-    pub workers: Option<usize>,
     #[serde(default)]
     pub libs: Vec<Lib>,
     #[serde(default)]
@@ -164,17 +166,6 @@ pub struct Manifest {
     #[serde(default)]
     pub network: bool,
     pub app: App,
-}
-
-impl Manifest {
-    /// Worker instances for server mode (host-owned accept loop).
-    /// 1/absent = legacy: the app's own `run` owns listen+accept.
-    pub fn worker_count(&self) -> usize {
-        match self.mode {
-            Mode::Server => self.workers.unwrap_or(1).max(1),
-            Mode::Command => 1,
-        }
-    }
 }
 
 impl Default for Target {

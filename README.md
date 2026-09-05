@@ -167,7 +167,7 @@ the target and its linker to be installed separately.
 - `air/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`net`/`link`/`cmds` modules)
 - `air/tests/cli.rs` — end-to-end tests that run the real binary
 - `examples/{hello,pi,prompts,provider-demo}/` — WASI 0.2 components; `examples/{server,prompts-raw,gui-hello}/` — Core WASM. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
-- `libs/http/` — hand-written WAT lib; `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
+- `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 
 Start with `docs/PROJECT.md`. It is the living project documentation

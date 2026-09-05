@@ -52,7 +52,7 @@ line or a Core function index back to authored source.
 
 | Target | Current capability boundary |
 |---|---|
-| `native` | Wasmtime, WASI Preview 1, experimental `term.*`/`net.*`, and declared Core providers. |
+| `native` | Wasmtime, WASI Preview 1, experimental `term.*`, and declared Core providers. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
 | `gui` | Native egui `ui.*` host and declared Core providers. |
 | `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. Consumes provider components through `[[providers]]`. **The default for new projects.** |
@@ -80,7 +80,7 @@ and for host ABIs that still pass raw pointers.
 Core project-owned providers currently use experimental `[[libs]]` (shared
 memory) or `[[bridges]]` (copying adapter) manifest entries. Their exports are
 auto-wired under a project-declared namespace. These, and `ui.*`, `web.*`,
-`term.*`, and `net.*`, are builder-phase interfaces: redesign them directly
+and `term.*`, are builder-phase interfaces: redesign them directly
 when the Component Model provides the correct generic boundary. Do not add
 shims or compatibility layers without a concrete released consumer.
 
@@ -448,6 +448,16 @@ test was checked against its own regression: with the reset commented out it
 fails on request 73. Unit tests pin that both controls are opt-in and that an
 unknown `"env"` import is an error.
 
+`examples/server/` is now a component and has end-to-end coverage it never had
+as a Core app -- it was only ever `air check`ed and driven by hand.
+`air/tests/cli.rs` serves `www/index.html` and `www/style.css` with the MIME
+types their extensions imply, repeats a request on a second connection, gets
+404 for a missing file and 403 for a `..` escape, digests `abc` through the
+vendored provider to `ba7816bf...`, runs 300 padded requests to exercise the
+per-request descriptor and stream drops together with the heap reset, and stops
+on `/quit` with exit 0. Benchmarked at 17.3k req/s on the in-memory route and
+10.2k on `index.html` -- see Retiring net.*.
+
 Fresh native, browser, and GUI scaffolds have completed their applicable
 `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
@@ -467,11 +477,6 @@ rebuild.
   long-lived collection can use. There is still no general allocator and no
   growth past the `pages=` the directive asks for. See Releasing Memory and
   Next Work item 2.
-- `mode = "server"` and the `net.*` host syscalls are now redundant for
-  components, which bind their own sockets through `wasi:sockets`. They remain
-  because `examples/server/` is a Core app that links `libs/http/http.wasm`,
-  and the component text format cannot embed a prebuilt `.wasm` (see the
-  composition gap below).
 - Validation-error mapping to source lines is Core-module-only in practice: a
   component with several core modules reports the module index, but the include
   map only tracks one function-index space per module.
@@ -499,9 +504,93 @@ WIT interfaces
   -> one distributable component plus air
 ```
 
-The Core `[[libs]]`, `[[bridges]]`, `ui.*`, `web.*`, `term.*`, and `net.*`
-mechanisms are experimental transitional tools, not the final public provider
-format.
+The Core `[[libs]]`, `[[bridges]]`, `ui.*`, `web.*`, and `term.*` mechanisms
+are experimental transitional tools, not the final public provider format.
+`net.*` was one of them and is the first to have finished the trip: it is
+gone.
+
+### Retiring net.*
+
+`net.*` was five host functions over `std::net` -- listen, accept, recv, send,
+close -- with an integer handle table in `Host`. It existed because Core WASM
+had no sockets. `wasi:sockets` is that capability as a standard, so the two
+were doing the same job, and the question was only whether the standard was
+good enough to delete the proprietary one.
+
+It was measured before it was decided. Both servers are single-threaded and
+close after each response, so the fair comparison is serial
+connection-per-request. `examples/server/` was given an in-memory `/hello`
+route emitting the same 111 bytes `examples/tcp-hello/` sends, so the
+measurement was of the two transports rather than one transport plus a
+`path_open`:
+
+| Path | Core + `net.*` | Component + `wasi:sockets` |
+| --- | --- | --- |
+| in-memory response | 24.5k req/s, p50 37us | 18.0k req/s, p50 53us |
+| `www/index.html` | 9.1k req/s, p50 100us | 10.2k req/s, p50 91us |
+
+The component costs ~16us per request on the synthetic path: roughly ten
+boundary crossings against four (`pollable.block`, `accept`, `blocking-read`
+plus its `cabi_realloc` call back into the guest, `blocking-write-and-flush`,
+three drops, and the two heap controls), at about 2.7us each.
+
+The second row is the one that decided it. On the path the server actually
+exists to serve, the component is *faster* -- it buffers one response and
+issues one write, where the Core version called `net.send` per header. The
+16us is real and irrelevant: the file read alone costs four times more.
+
+Three things settled it beyond the numbers:
+
+- **`net.*` had no grant.** `w_listen` called `TcpListener::bind` directly,
+  with no `network = true` and no `--net`. It was the one capability in the
+  harness that was not a capability. The component path denies sockets by
+  default.
+- **It could not grow.** `wasi:io/poll`'s `poll(list<pollable>)` is a real
+  path to serving many connections from one guest loop. `net.*` had no
+  equivalent and would have needed new host functions to reach where the
+  standard already was.
+- **It was Core-only**, so every server was locked out of the component path,
+  providers, and the generated boundary.
+
+What actually blocked the retirement was never the transport: `examples/server/`
+was a Core app linking `libs/http/http.wasm` as a lib and `libs/sha256.wasm` as
+a bridge, and the component text format cannot embed a prebuilt `.wasm`. Both
+halves dissolved rather than needing the composition work:
+
+- The HTTP helpers were *source*, so they became `examples/server/src/http.wat`
+  and are `;; @include`d. They also changed shape: the Core lib wrote pieces to
+  a socket, and a component holds an `output-stream` handle, which cannot cross
+  a provider boundary. Buffering the whole response and writing once is both
+  simpler and fewer crossings. `libs/http/` is deleted.
+- The digest was already a component. `[[bridges]]` with its four offset fields
+  became one `[[providers]]` line pointing at the same vendored
+  `ai-direct:sha256` package `examples/sha256sum/` consumes -- the first time
+  one catalog package serves two applications.
+
+The remaining pure helpers, `$parse_request` and `$mime_for`, are the natural
+next catalog provider precisely because they touch no handles: bytes in, values
+out. That is not done, and it is not urgent.
+
+Converting it surfaced three `air dist` bugs that no example had been in a
+position to find. A distribution copied `[[libs]]` and `[[bridges]]` but not
+`[[providers]]`, and it dropped `network = true`: both made a packaged server
+fail at runtime rather than at packaging time -- missing provider, or
+`access-denied` on the first socket call. The third was older and unrelated to
+components: a `root` that cannot be copied into the bundle -- `"../.."` in
+`examples/sha256sum/`, or `"."` anywhere -- failed with "root has no directory
+name", because the path was never resolved before its file name was taken. A
+grant like that is a development convenience, not a thing to ship, so dist now
+resolves the path, packages the directory when it is one the bundle can
+contain, and otherwise omits the grant with a note saying the packaged app
+needs `--dir`. Omitting narrows what the app can reach, which is the safe
+direction. All three are fixed, and `air/tests/cli.rs` packages both examples
+and runs each copy on its own.
+
+Deleted with it: `air/src/net.rs`, the socket table in `Host`, `Mode::Server`,
+`workers` and the host-owned worker pool in `cmds/run.rs`, the `i32 -> i32`
+server entry signature in `cmds/check.rs`, and `examples/server/mt.toml`. A
+manifest that still says `mode = "server"` now fails to parse, which is the
+right way to find out.
 
 ### The Component Path Works
 
@@ -597,10 +686,9 @@ signatures pass pointers into guest memory, which has no meaning across a
 component boundary. It needs value-based signatures (`string`, `list<u8>`)
 first. That is a redesign, not a blocker.
 
-`net.*` does not need the trip at all. It exists because Core WASM had no
-sockets; a component asks for `;; @wasi sockets` and gets `wasi:sockets`
-straight from the WIT, as `examples/tcp-hello/` does. The Core `net.*` ABI and
-`mode = "server"` stay only for `examples/server/`, and they retire with it.
+`net.*` did not need the trip at all, and it has been deleted. It existed
+because Core WASM had no sockets; a component asks for `;; @wasi sockets` and
+gets `wasi:sockets` straight from the WIT. See Retiring net.*.
 
 ### What Actually Needs A Harness Change
 
@@ -847,10 +935,11 @@ being specification-only before more specification is written.
    Grow the mail example far enough to state it.
 3. Give `ui.*` value-based signatures so components can import it, then
    convert `gui-hello`. `term.*` already made the trip as
-   `ai-direct:host/term`; `net.*` needs no trip, because a component reaches
-   `wasi:sockets` directly and now releases what it accepts.
+   `ai-direct:host/term`; `net.*` needed no trip and has been deleted.
 4. Decide build-time composition only when a released provider needs a single
-   fused artifact or handle passing. See Provider Linking above.
+   fused artifact or handle passing. See Provider Linking above. Converting
+   `examples/server/` did not need it: source libs `;; @include`, and a
+   compiled one was already a provider component.
 5. Add a separate component consumer proof in the mail example. Do not force
    the existing Core WAT app to call a WIT component without an explicit
    component boundary.

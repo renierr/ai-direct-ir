@@ -234,7 +234,7 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
             "| `index.html` | The page containing the application canvas. |\n| `web-host.js` | Trusted browser runtime that implements the `web.*` imports. |",
             "The module exports `start()` (the `[app].run` entry). It may import only the\ndeclared `web.*` functions implemented in `web-host.js`: Canvas dimensions,\n`clear`, `fill_rect`, keyboard state, pointer coordinates, and frame scheduling.\nIf it imports `request_frame()`, it must export `frame()`. `web-host.js` owns\nbrowser events and drawing effects; WAT owns application state and behavior.",
             "Use `air serve` and test the result in a browser",
-            "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `net.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
+            "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
         )
     } else if *target == Target::Gui {
         (
@@ -254,9 +254,9 @@ fn project_doc(template: &str, name: &str, target: &Target) -> String {
             "air run",
             "`air run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime. `air dist`\ncontains the `air` executable, a rewritten local `host.toml`, the app,\ndeclared WASM dependencies, and any configured `root` data directory.",
             "",
-            "Command applications normally export `_start()` and can use declared WASI\nstdio/files and optional `term.*` terminal calls. Server applications use\n`mode = \"server\"` and an entry such as `run(port)` or `handle(cfd)` with\n`workers = N`. Only imports implemented by the native host and configured in\n`host.toml` are available.",
+            "Command applications export `_start()` and can use declared WASI\nstdio/files and optional `term.*` terminal calls. Only imports implemented by\nthe native host and configured in `host.toml` are available. A network server\nis a component, not a native app: it owns its accept loop through\n`;; @wasi sockets`.",
             "Run `air run` and exercise the expected CLI or server behavior",
-            "- `mode = \"command\"`: keep a plain stdio path; use `term.*` only after\n  checking `term.available` so pipes and CI still work.\n- `mode = \"server\"`: document socket and buffer ownership. Use `workers = N`\n  only when the entry handles one accepted connection.\n- Browser `web.*` imports, `index.html`, and `web-host.js` do not exist for this\n  target. A browser UI is a separate browser project.",
+            "- `mode = \"command\"`: keep a plain stdio path; use `term.*` only after\n  checking `term.available` so pipes and CI still work.\n- Browser `web.*` imports, `index.html`, and `web-host.js` do not exist for this\n  target. A browser UI is a separate browser project.",
         )
     };
     template
@@ -317,10 +317,7 @@ fn select_target() -> Result<Target> {
             Print("Create target (Up/Down, Enter):\r\n")
         )?;
         for (index, (name, description)) in [
-            (
-                "Native",
-                "WASI Preview 1, terminal, server, and WASM libraries",
-            ),
+            ("Native", "WASI Preview 1, terminal, and WASM libraries"),
             ("Browser", "Canvas application served to a web browser"),
             ("GUI", "Native egui desktop application"),
             ("Component", "WASM component on WASI 0.2"),
@@ -473,11 +470,12 @@ fn gui_starter(name: &str) -> (String, String) {
 pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
     let m = wasmtime::Module::from_file(engine, app_path)?;
     let mut namespaces: Vec<String> = vec![];
-    let mut wants_net = false;
     for imp in m.imports() {
+        // `net` is no longer special: the host syscalls retired, so a module
+        // importing it needs a `[[libs]]` module of its own like any other
+        // namespace. A component asks for `;; @wasi sockets` instead.
         match imp.module() {
             "env" | "wasi_snapshot_preview1" => {}
-            "net" => wants_net = true,
             ns => {
                 if !namespaces.contains(&ns.to_string()) {
                     namespaces.push(ns.to_string());
@@ -499,12 +497,8 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
         format!("{dir}/")
     };
     let mut out = String::new();
-    if wants_net {
-        out.push_str("mode = \"server\"\nport = 8123\n");
-        out.push_str("# root = \"www\"  # uncomment to preopen a data dir (WASI fd 3)\n");
-    } else {
-        out.push_str("mode = \"command\"\n");
-    }
+    out.push_str("mode = \"command\"\n");
+    out.push_str("# root = \"www\"  # uncomment to preopen a data dir (WASI fd 3)\n");
     out.push_str("# memory_pages = 2  # floor; import minima always win\n\n");
     for ns in &namespaces {
         out.push_str(&format!(
@@ -514,7 +508,7 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
     if namespaces.is_empty() {
         out.push_str("# no custom namespaces: app needs only env/net/wasi\n\n");
     }
-    let run = if wants_net { "run" } else { "_start" };
+    let run = "_start";
     out.push_str(&format!(
         "[app]\npath = \"{pref}{stem}.wasm\"\nrun = \"{run}\"\n"
     ));

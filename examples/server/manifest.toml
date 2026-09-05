@@ -1,30 +1,20 @@
-# Static file server: WAT app + WAT lib + Rust bridge, one harness.
-# Paths are relative to THIS file. Run from anywhere:
-#   air examples/server/manifest.toml
-mode = "server"
-port = 8124
+# Static file server as a WASI 0.2 component. Run from anywhere:
+#   air run examples/server/manifest.toml      # :8124
+#
+# The guest owns its accept loop through `wasi:sockets`, so there is no
+# `mode = "server"` and no host `net.*` layer. Two grants make it work:
+# `network = true` lets it bind, and `root = "www"` is the only directory it
+# can read -- a component gets no ambient filesystem.
+mode = "command"
+network = true
 root = "www"
-memory_pages = 2
 
-[[libs]]
-path = "../../libs/http/http.wasm"
-as = "lib"
-
-[[bridges]]
-path = "../../libs/sha256/sha256.wasm"
-as = "bridge"
-alloc = "sha256_alloc"
-
-[[bridges.calls]]
-as = "sha256"
-func = "sha256_hex"
-in_ptr = 0
-in_len = 1
-out_ptr = 2
-out_len = 64
-max_in = 7000
+# The digest comes from the same vendored provider `examples/sha256sum/` uses,
+# rather than a Core bridge memory-copying into a Preview 1 module.
+[[providers]]
+path = "../sha256sum/vendor/ai-direct-sha256-0.1.0/artifacts/wasm32-wasi/sha256.component.wasm"
 
 [app]
 source = "server.wat"
 path = "server.wasm"
-run = "run"
+run = "wasi:cli/run"

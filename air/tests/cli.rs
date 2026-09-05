@@ -243,7 +243,6 @@ fn repository_examples_check() {
         "examples/pi/host.toml",
         "examples/prompts/host.toml",
         "examples/server/manifest.toml",
-        "examples/server/mt.toml",
         "examples/prompts-raw/host.toml",
         "examples/gui-hello/host.toml",
         "examples/provider-demo/host.toml",
@@ -280,19 +279,37 @@ fn request(path: &str) -> String {
     request_sized(path, 0)
 }
 
+/// A request against the `server` example, which listens on 8124.
+fn server_request(path: &str) -> String {
+    request_to("127.0.0.1:8124", path, 0, None)
+}
+
 /// The same, padded with a header of `filler` bytes. The component allocates
 /// one `list<u8>` per request out of its bump heap, so the padding is what
 /// decides how fast a loop exhausts it -- see `tcp_hello_outlives_its_bump_heap`.
 fn request_sized(path: &str, filler: usize) -> String {
-    let mut socket = connect("127.0.0.1:8125");
+    request_to("127.0.0.1:8125", path, filler, None)
+}
+
+/// One request, read to end of stream. Reading to EOF is the point: both
+/// example servers send a `Content-Length`, so a client could stop early --
+/// this waits for the close, which happens only when the component drops the
+/// accepted socket.
+fn request_to(addr: &str, path: &str, filler: usize, body: Option<&str>) -> String {
+    let mut socket = connect(addr);
     socket
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .expect("set read timeout");
-    let padding = "x".repeat(filler);
-    let request = if filler == 0 {
-        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n")
-    } else {
-        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Pad: {padding}\r\n\r\n")
+    let request = match body {
+        Some(body) => format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+        None if filler == 0 => format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        None => format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Pad: {}\r\n\r\n",
+            "x".repeat(filler)
+        ),
     };
     socket.write_all(request.as_bytes()).expect("send request");
     let mut response = String::new();
@@ -344,6 +361,82 @@ fn tcp_hello_example_serves_connections_until_told_to_stop() {
     );
     assert!(
         stdout(&out).contains("tcp-hello: /quit"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// `examples/server/` as a component: it owns its accept loop through
+/// `wasi:sockets`, reads `www/` through `wasi:filesystem`, and gets its digest
+/// from the vendored `ai-direct:sha256` provider. Nothing here goes through a
+/// host syscall -- the `net.*` layer it used to depend on no longer exists.
+///
+/// This is coverage the Core version never had: it was only ever `air check`ed
+/// and driven by hand.
+#[test]
+fn server_example_serves_files_and_digests() {
+    let _shared = examples_lock();
+    let repo = repo();
+    let built = run(&repo, &["build", "examples/server/manifest.toml"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+
+    let child = Command::new(air_bin())
+        .args(["run", "examples/server/manifest.toml"])
+        .current_dir(&repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn air");
+
+    // A file from the granted directory, with the MIME type its extension
+    // implies and a Content-Length the harness never computed.
+    let index = server_request("/");
+    assert!(index.starts_with("HTTP/1.1 200 OK\r\n"), "{index}");
+    assert!(
+        index.contains("Content-Type: text/html; charset=utf-8"),
+        "{index}"
+    );
+    assert!(index.contains("<!DOCTYPE html>"), "{index}");
+    let css = server_request("/style.css");
+    assert!(css.contains("Content-Type: text/css"), "{css}");
+
+    // Two requests on separate connections prove the per-connection drops:
+    // each is read to end of stream, and the second is accepted only because
+    // the loop came back around.
+    let again = server_request("/");
+    assert_eq!(again, index, "the loop must serve a second connection");
+
+    // Nothing outside the grant, and no way to climb out of it.
+    assert!(
+        server_request("/nope").starts_with("HTTP/1.1 404"),
+        "missing file"
+    );
+    let escape = request_to("127.0.0.1:8124", "/../AGENTS.md", 0, None);
+    assert!(escape.starts_with("HTTP/1.1 403"), "{escape}");
+
+    // The digest crosses a component boundary into the vendored provider.
+    let digest = request_to("127.0.0.1:8124", "/sha256", 0, Some("abc"));
+    assert!(
+        digest.ends_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+        "{digest}"
+    );
+
+    // Each served file opens a descriptor and a stream; if they were not
+    // dropped the run would accumulate two handles per request. Enough
+    // requests to make that obvious, and the heap reset has to hold too.
+    for n in 0..300 {
+        let response = request_to("127.0.0.1:8124", "/hello", 400, None);
+        assert!(
+            response.ends_with("hello, air!\n"),
+            "request {n}: {response}"
+        );
+    }
+
+    server_request("/quit");
+    let out = child.wait_with_output().expect("wait for air");
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("listening on 127.0.0.1:8124"),
         "{}",
         stdout(&out)
     );
@@ -712,6 +805,93 @@ fn a_core_module_is_rejected_by_the_component_target() {
         "{}",
         stderr(&out)
     );
+}
+
+#[test]
+fn a_distribution_carries_its_providers_and_its_grants() {
+    let _shared = examples_lock();
+    let repo = repo();
+    let built = run(&repo, &["build", "examples/server/manifest.toml"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+    let out = run(&repo, &["dist", "examples/server/manifest.toml"]);
+    assert!(out.status.success(), "dist failed: {}", stderr(&out));
+    let dist = repo.join("examples/server/dist");
+
+    // The artifact imports the provider's interface rather than containing it,
+    // so a distribution without the component cannot instantiate.
+    assert!(
+        dist.join("sha256.component.wasm").is_file(),
+        "dist did not bundle the provider component"
+    );
+    let manifest = std::fs::read_to_string(dist.join("host.toml")).expect("read dist manifest");
+    // A grant belongs to the application, not to the shell that packaged it.
+    assert!(manifest.contains("network = true"), "{manifest}");
+    assert!(manifest.contains("sha256.component.wasm"), "{manifest}");
+
+    // The real proof is that the copy runs on its own.
+    let child = Command::new(dist.join("air"))
+        .args(["run", "host.toml"])
+        .current_dir(&dist)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn packaged air");
+    let index = server_request("/");
+    assert!(index.contains("<!DOCTYPE html>"), "{index}");
+    let digest = request_to("127.0.0.1:8124", "/sha256", 0, Some("abc"));
+    assert!(
+        digest.ends_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+        "{digest}"
+    );
+    server_request("/quit");
+    let done = child.wait_with_output().expect("wait for packaged air");
+    assert!(done.status.success(), "{}", stderr(&done));
+    std::fs::remove_dir_all(&dist).ok();
+}
+
+/// A `root` that cannot be copied into the bundle must not stop the packaging.
+/// `examples/sha256sum/` grants `root = "../.."` -- the whole repository -- as
+/// a development convenience; that is not a directory to ship, and resolving
+/// it used to fail with an unexplained "root has no directory name".
+#[test]
+fn a_root_that_cannot_travel_is_dropped_with_a_note() {
+    let _shared = examples_lock();
+    let repo = repo();
+    let out = run(&repo, &["dist", "examples/sha256sum/host.toml"]);
+    assert!(out.status.success(), "dist failed: {}", stderr(&out));
+    assert!(stderr(&out).contains("cannot travel"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("--dir"), "{}", stderr(&out));
+
+    let dist = repo.join("examples/sha256sum/dist");
+    let manifest = std::fs::read_to_string(dist.join("host.toml")).expect("read dist manifest");
+    // Dropping the grant narrows what the packaged app reaches, and the whole
+    // repository is emphatically not in the bundle.
+    assert!(!manifest.contains("root"), "{manifest}");
+    assert!(
+        !dist.join("ai-direct-ir").exists(),
+        "the repo got copied in"
+    );
+    assert!(
+        dist.join("sha256.component.wasm").is_file(),
+        "provider missing"
+    );
+
+    // It still runs, granted from the shell the way the note says.
+    let file = dist.join("subject.txt");
+    std::fs::write(&file, "abc").expect("write subject");
+    let out = Command::new(dist.join("air"))
+        .args(["run", "--dir", ".", "host.toml", "subject.txt"])
+        .current_dir(&dist)
+        .output()
+        .expect("run packaged air");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out)
+            .starts_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+        "{}",
+        stdout(&out)
+    );
+    std::fs::remove_dir_all(&dist).ok();
 }
 
 #[test]

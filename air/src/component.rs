@@ -191,7 +191,7 @@ pub fn link_all(
 /// interface is not a WASI question: a component imports one exactly as it
 /// imports `wasi:io/streams`, and the harness supplies it here.
 ///
-/// Only the memory-free calls are exposed. `ui.*` and `net.*` pass pointers
+/// Only the memory-free calls are exposed. `ui.*` passes pointers
 /// into guest memory, which has no meaning across a component boundary; they
 /// need value-based signatures (`string`, `list<u8>`) before they can follow.
 const TERM_INTERFACE: &str = "ai-direct:host/term";

@@ -8,7 +8,6 @@ mod gui;
 mod host;
 mod link;
 mod manifest;
-mod net;
 mod term;
 mod wit;
 

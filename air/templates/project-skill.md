@@ -15,7 +15,8 @@ provider, or its WIT/Component Model integration.
   language toolchain merely to build an application.
 - **Prefer `target = "component"` (WASI 0.2) for new work.** Preview 1 (`target
   = "native"`) remains supported and is still required for raw-mode terminals,
-  the `net.*` sockets ABI, `ui.*`, and `[[libs]]`/`[[bridges]]` providers.
+  `ui.*`, and `[[libs]]`/`[[bridges]]` providers. A server is a component
+  that owns its accept loop through `;; @wasi sockets`.
 - `air check`, target run, and `air dist` rebuild a declared root WAT
   source when it or an included fragment is newer than the generated WASM.
   `air build` forces a rebuild.

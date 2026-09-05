@@ -36,10 +36,11 @@ hello, air!
   otherwise. Delete `network = true` from `host.toml` and the run stops at
   `create-tcp-socket` with error-code 1. `air run --net` is the shell-side
   equivalent, for a manifest that does not ask.
-- **The guest owns the accept loop.** `air`'s `mode = "server"` and its
-  `net.*` host syscalls exist because Core WASM had no sockets; nothing in
-  this example goes through them. WASI 0.2 has no blocking accept, so the
-  program subscribes to the socket and blocks on the `pollable`.
+- **The guest owns the accept loop.** `air` has no host socket layer at all
+  any more: `net.*` and `mode = "server"` existed because Core WASM had no
+  sockets, and both retired once `examples/server/` became a component. WASI
+  0.2 has no blocking accept, so the program subscribes to the socket and
+  blocks on the `pollable`.
 - **A handle is released by the program that owns it.** Every resource the
   boundary declares offers `<resource>.drop`, and this is the example that
   needs it: an accepted connection is three handles, released before the next

@@ -12,8 +12,7 @@ use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::gui;
 use crate::host::{Host, shared_mem};
-use crate::manifest::{Bridge, Lib, Manifest, Mode};
-use crate::net;
+use crate::manifest::{Bridge, Lib, Manifest};
 use crate::term;
 
 /// Resolve a manifest path: manifest dir wins, CWD is the fallback, so both
@@ -131,8 +130,6 @@ pub struct Linked {
     pub store: Store<Host>,
     pub app_inst: wasmtime::Instance,
     pub run_name: String,
-    pub is_server: bool,
-    pub port: u16,
 }
 
 /// Load + link everything, stop before executing. Shared by `run` and `check`.
@@ -174,12 +171,6 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
         linker.define(&mut store, "env", "memory", mem)?;
     }
 
-    linker.func_wrap("net", "listen", net::w_listen)?;
-    linker.func_wrap("net", "accept", net::w_accept)?;
-    linker.func_wrap("net", "recv", net::w_recv)?;
-    linker.func_wrap("net", "send", net::w_send)?;
-    linker.func_wrap("net", "close", net::w_close)?;
-
     linker.func_wrap("term", "enter", term::w_enter)?;
     linker.func_wrap("term", "available", term::w_available)?;
     linker.func_wrap("term", "exit", term::w_exit)?;
@@ -212,7 +203,5 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
         store,
         app_inst,
         run_name: manifest.app.run.clone(),
-        is_server: matches!(manifest.mode, Mode::Server),
-        port: manifest.port.unwrap_or(8123),
     })
 }

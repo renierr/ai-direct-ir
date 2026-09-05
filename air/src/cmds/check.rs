@@ -1,6 +1,6 @@
 //! `air check` -- link a manifest and verify every import is satisfied.
 
-use wasmtime::{Engine, ExternType, Result, ValType};
+use wasmtime::{Engine, ExternType, Result};
 
 use crate::link::link_all;
 use crate::manifest::{Manifest, Target};
@@ -27,32 +27,18 @@ pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> R
     let linked = link_all(engine, manifest, &base)?;
     let app_mod =
         wasmtime::Module::from_file(engine, crate::link::join(&base, &manifest.app.path))?;
-    let want_server = linked.is_server;
     let found = app_mod.exports().find(|e| e.name() == linked.run_name);
     match found {
         Some(e) => match e.ty() {
             ExternType::Func(f) => {
-                let is_i32_i32 = f.params().len() == 1
-                    && matches!(f.params().next(), Some(ValType::I32))
-                    && f.results().len() == 1
-                    && matches!(f.results().next(), Some(ValType::I32));
-                let ok = if want_server {
-                    is_i32_i32
-                } else {
-                    f.params().len() == 0 && f.results().len() == 0
-                };
-                if ok {
+                if f.params().len() == 0 && f.results().len() == 0 {
                     println!("run `{}`: signature ok", linked.run_name);
                 } else {
                     return fail(format!(
                         "run `{}` has {}, want {}",
                         linked.run_name,
                         func_sig(&f),
-                        if want_server {
-                            "(func i32 -> i32)"
-                        } else {
-                            "(func  -> )"
-                        }
+                        "(func  -> )"
                     ));
                 }
             }

@@ -49,12 +49,18 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         "mode".into(),
         toml::Value::String(
             match manifest.mode {
-                crate::manifest::Mode::Server => "server",
                 crate::manifest::Mode::Command => "command",
             }
             .into(),
         ),
     );
+    // A grant is part of the application, not of the shell that built it: a
+    // distribution that dropped `network = true` would answer `access-denied`
+    // to every socket call, the same way one that dropped `root` would find
+    // no files.
+    if manifest.network {
+        manifest_out.insert("network".into(), toml::Value::Boolean(true));
+    }
     for (key, value) in [
         (
             "port",
@@ -66,28 +72,44 @@ pub fn cmd_dist(path: &str) -> Result<()> {
                 .memory_pages
                 .map(|v| toml::Value::Integer(v.into())),
         ),
-        (
-            "workers",
-            manifest.workers.map(|v| toml::Value::Integer(v as i64)),
-        ),
     ] {
         if let Some(value) = value {
             manifest_out.insert(key.into(), value);
         }
     }
     if let Some(root) = &manifest.root {
-        let source = manifest_path(&base, root);
-        let name = source
-            .file_name()
-            .ok_or_else(|| wasmtime::Error::msg("root has no directory name"))?;
-        let dest = dist.join(name);
-        copy_dir(&source, &dest)?;
-        manifest_out.insert(
-            "root".into(),
-            toml::Value::String(name.to_string_lossy().into()),
-        );
-        if let Some(guest) = &manifest.guest {
-            manifest_out.insert("guest".into(), toml::Value::String(guest.clone()));
+        // A `root` travels only if it is a directory the bundle can contain.
+        // `root = "../.."` grants the whole repository and `root = "."` the
+        // project the bundle is being written into: both are development
+        // conveniences, and neither is a thing to copy. Resolve first --
+        // `examples/app/../..` has no file name at all, which is what used to
+        // surface as an unexplained error.
+        let source = std::fs::canonicalize(manifest_path(&base, root))
+            .unwrap_or_else(|_| manifest_path(&base, root));
+        let contains_bundle = dist.starts_with(&source);
+        let inside_project = source.starts_with(&base);
+        match source.file_name() {
+            Some(name) if inside_project && !contains_bundle => {
+                copy_dir(&source, &dist.join(name))?;
+                manifest_out.insert(
+                    "root".into(),
+                    toml::Value::String(name.to_string_lossy().into()),
+                );
+                if let Some(guest) = &manifest.guest {
+                    manifest_out.insert("guest".into(), toml::Value::String(guest.clone()));
+                }
+            }
+            _ => {
+                // Dropping the grant narrows what the packaged app can reach,
+                // which is the safe direction -- but it changes how the app is
+                // run, so say so rather than leaving it to be discovered.
+                eprintln!(
+                    "note: `root = \"{root}\"` resolves to {} and cannot travel \
+                     with the bundle; the packaged app grants no directory. \
+                     Run it with `air run --dir <path> host.toml`.",
+                    source.display()
+                );
+            }
         }
     }
     if matches!(
@@ -132,6 +154,19 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         }
         if !bridges.is_empty() {
             manifest_out.insert("bridges".into(), toml::Value::Array(bridges));
+        }
+        // A component's providers are part of the application the same way a
+        // Core lib is: the artifact does not contain them, it imports their
+        // interfaces, so a distribution without them cannot instantiate.
+        let mut providers = Vec::new();
+        for provider in &manifest.providers {
+            let path = copy_bundle_file(&base, &dist, &provider.path)?;
+            let mut item = toml::Table::new();
+            item.insert("path".into(), toml::Value::String(path));
+            providers.push(toml::Value::Table(item));
+        }
+        if !providers.is_empty() {
+            manifest_out.insert("providers".into(), toml::Value::Array(providers));
         }
         let executable = std::env::current_exe()?;
         let host_name = if cfg!(windows) { "air.exe" } else { "air" };
