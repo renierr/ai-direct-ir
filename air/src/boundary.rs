@@ -43,6 +43,7 @@ pub struct Boundary {
     stderr: bool,
     exit: bool,
     exit_with_code: bool,
+    args: bool,
 }
 
 impl Boundary {
@@ -72,6 +73,7 @@ pub fn parse(args: &str) -> Result<Boundary> {
         stderr: false,
         exit: false,
         exit_with_code: false,
+        args: false,
     };
     for word in args.split_whitespace() {
         match word.split_once('=') {
@@ -88,11 +90,12 @@ pub fn parse(args: &str) -> Result<Boundary> {
                 "stderr" => boundary.stderr = true,
                 "exit" => boundary.exit = true,
                 "exit-with-code" => boundary.exit_with_code = true,
+                "args" => boundary.args = true,
                 other => {
                     return Err(wasmtime::Error::msg(format!(
                         "unknown `@wasi` capability `{other}`; \
-                         expected `stdin`, `stdout`, `stderr`, `exit` \
-                         or `exit-with-code`"
+                         expected `stdin`, `stdout`, `stderr`, `exit`, \
+                         `exit-with-code` or `args`"
                     )));
                 }
             },
@@ -209,6 +212,13 @@ fn emit_cli(boundary: &Boundary, out: &mut String) {
              \x20 (alias export $stderr \"get-stderr\" (func $get-stderr))\n\n"
         ));
     }
+    if boundary.args {
+        out.push_str(&format!(
+            "  (import \"wasi:cli/environment@{VERSION}\" (instance $env\n\
+             \x20   (export \"get-arguments\" (func (result (list string))))))\n\
+             \x20 (alias export $env \"get-arguments\" (func $get-args))\n\n"
+        ));
+    }
     if boundary.exit || boundary.exit_with_code {
         out.push_str(&format!(
             "  (import \"wasi:cli/exit@{VERSION}\" (instance $exit-i\n"
@@ -275,6 +285,10 @@ fn emit_lowering(boundary: &Boundary, out: &mut String) {
     }
     if boundary.output() {
         lowered.push(("write", "$write", true));
+    }
+    if boundary.args {
+        // A list of strings is allocated into the guest, so this one needs both.
+        lowered.push(("get-arguments", "$get-args", true));
     }
     if boundary.exit {
         lowered.push(("exit", "$exit-fn", false));
