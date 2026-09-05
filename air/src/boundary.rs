@@ -347,14 +347,14 @@ fn emit_lowering(
     }
     out.push_str("  )\n");
     if let Some(filesystem) = filesystem {
+        // Every filesystem lowering takes memory and realloc, whether its
+        // signature visibly needs it or not: handle and record returns
+        // validate only with memory present, and an unused option is
+        // harmless. Verified by `air check` + `air run` on sha256sum.
         for lower in filesystem {
-            let extra = if lower.needs_memory {
-                " (memory $memory) (realloc $realloc)"
-            } else {
-                ""
-            };
             out.push_str(&format!(
-                "  (core func {}-l (canon lower (func {}){extra}))\n",
+                "  (core func {}-l (canon lower (func {}) \
+                 (memory $memory) (realloc $realloc)))\n",
                 lower.func, lower.func
             ));
         }

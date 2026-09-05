@@ -31,12 +31,12 @@ const CLOCKS_WIT: &str = include_str!("../wit/wasi-0.2.12/clocks.wit");
 const FILESYSTEM_WIT: &str = include_str!("../wit/wasi-0.2.12/filesystem.wit");
 
 /// One lowered filesystem function: the short name the application imports
-/// from `"fs"`, the component-level function it lowers, and whether values
-/// cross the boundary (lists, strings) so the lowering needs memory.
+/// from `"fs"` and the component-level function it lowers. Every filesystem
+/// lowering takes `(memory $memory) (realloc $realloc)`, so there is nothing
+/// per-function to decide (see `emit_func`).
 pub struct FsLower {
     pub export: String,
     pub func: String,
-    pub needs_memory: bool,
 }
 
 /// The generated filesystem boundary: import text plus aliases, and the
@@ -76,8 +76,9 @@ pub fn filesystem() -> wasmtime::Result<Filesystem> {
     // filesystem graph needs beyond `wasi:io`. Structural, like every other
     // generated declaration.
     let datetime = datetime_id(&resolve, wall_clock)?;
+    // `instance` stays empty: it names the alias source for functions, and
+    // this emitter emits one type and no functions.
     let mut clock = Emitter::new(&resolve, "$fs-clock");
-    clock.instance = "$fs-clock".to_string();
     clock.emit_type(wall_clock, "datetime", datetime)?;
     let clock_wat = clock.finish_instance("$fs-clock", "wasi:clocks/wall-clock@0.2.12");
     // Declare-then-export: an inline instance export only takes `eq`/`sub`.
@@ -549,20 +550,10 @@ impl<'a> Emitter<'a> {
                 self.value(&param.ty)?
             ));
         }
-        // A `result<_, _>` return arrives as a named `Result` typedef;
-        // anything else is a plain value. Either way the function wraps it
-        // in one `(result ...)` level.
+        // The function wraps its return in one `(result ...)` level. An
+        // anonymous `result<_, _>` renders in place through `value`, a named
+        // one references its exported id; both are valid in that position.
         let result = match &func.result {
-            Some(Type::Id(id))
-                if matches!(&self.resolve.types[*id].kind, TypeDefKind::Result(_)) =>
-            {
-                let def = self.resolve.types[*id].clone();
-                let TypeDefKind::Result(result) = &def.kind else {
-                    unreachable!()
-                };
-                let inner = self.result_spelling(result.ok.as_ref(), result.err.as_ref())?;
-                format!(" (result {inner})")
-            }
             Some(ty) => format!(" (result {})", self.value(ty)?),
             None => String::new(),
         };
@@ -572,15 +563,9 @@ impl<'a> Emitter<'a> {
             "  (alias export {} \"{export}\" (func {alias}))",
             self.instance
         ));
-        // Every filesystem lowering takes `(memory $memory) (realloc
-        // $realloc)`, whether its signature visibly needs it or not: handle
-        // and record returns validate only with memory present, and an
-        // unused option is harmless. Verified by `air check` + `air run` on
-        // the sha256sum example.
         Ok(FsLower {
             export: short,
             func: alias,
-            needs_memory: true,
         })
     }
 }
