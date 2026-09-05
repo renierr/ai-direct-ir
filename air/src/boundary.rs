@@ -32,6 +32,14 @@
 //! `$wasi` exports one Core function per requested capability: `get-stdin`,
 //! `read`, `get-stdout`, `get-stderr`, `write`, `exit`, `exit-with-code`.
 //!
+//! It also releases handles. A resource the boundary declares can be dropped
+//! by importing `<resource>.drop` — `"input-stream.drop"` and
+//! `"output-stream.drop"` from `"wasi"`, `"tcp-socket.drop"` and
+//! `"descriptor.drop"` from the capability instances. This one part of `$wasi`
+//! is decided by the imports rather than the directive, because dropping is
+//! not a capability: it releases a handle the program already holds, and the
+//! only thing that can say which handles those are is the program.
+//!
 //! `exit` takes a `result` discriminant — 0 or 1, nothing else — so it says
 //! only whether the run failed. A program that wants a POSIX-style status asks
 //! for `exit-with-code`, which takes a `u8`.
@@ -93,7 +101,29 @@ impl Boundary {
     fn write(&self) -> bool {
         self.output() || self.sockets
     }
+
+    /// True when the boundary declares the `input-stream` resource, which is
+    /// wider than declaring the read method: `filesystem` needs the type for
+    /// `read-via-stream`'s return without needing to read one here.
+    fn input_stream(&self) -> bool {
+        self.read() || self.filesystem
+    }
+
+    /// The same for `output-stream`.
+    fn output_stream(&self) -> bool {
+        self.write() || self.filesystem
+    }
 }
+
+/// The `wasi:io` resources `emit_streams` can declare, and the WAT name each
+/// one is aliased to. A resource the boundary declares can be released:
+/// `(import "wasi" "input-stream.drop" ...)` puts `resource.drop` on it, the
+/// same rule and the same spelling the generated capabilities follow.
+const STREAM_RESOURCES: [(&str, &str); 3] = [
+    ("error", "$error"),
+    ("input-stream", "$istream"),
+    ("output-stream", "$ostream"),
+];
 
 /// Parse the argument list of `;; @wasi <args>`.
 ///
@@ -191,8 +221,53 @@ pub fn emit(boundary: &Boundary, imports: &Imports) -> Result<String> {
         out.push_str(&generated.wat);
     }
     emit_memory(boundary, &mut out);
-    emit_lowering(boundary, &derived, &mut out);
+    emit_lowering(
+        boundary,
+        &stream_drops(boundary, imports)?,
+        &derived,
+        &mut out,
+    );
     Ok(out)
+}
+
+/// The stream resources the application asked to be able to release, in
+/// declaration order. Unlike the rest of `$wasi` these come from the imports
+/// rather than the directive: `resource.drop` is not a capability -- it
+/// releases a handle the program already holds -- so what decides it is the
+/// same thing that decides `$fs` and `$net`, the `(import ...)` line itself.
+fn stream_drops(
+    boundary: &Boundary,
+    imports: &Imports,
+) -> Result<Vec<(&'static str, &'static str)>> {
+    let used = imports.get("wasi").cloned().unwrap_or_default();
+    let declared: Vec<(&str, &str)> = STREAM_RESOURCES
+        .into_iter()
+        .filter(|(wit, _)| match *wit {
+            "input-stream" => boundary.input_stream(),
+            "output-stream" => boundary.output_stream(),
+            _ => boundary.streams(),
+        })
+        .collect();
+    let mut drops = Vec::new();
+    for name in used.iter().filter(|name| name.ends_with(".drop")) {
+        let resource = name.trim_end_matches(".drop");
+        match declared.iter().find(|(wit, _)| *wit == resource) {
+            Some(found) => drops.push(*found),
+            None => {
+                let names: Vec<&str> = declared.iter().map(|(wit, _)| *wit).collect();
+                return Err(wasmtime::Error::msg(format!(
+                    "`(import \"wasi\" \"{name}\" ...)` releases no resource this \
+                     boundary declares; `$wasi` drops {}",
+                    if names.is_empty() {
+                        String::from("nothing, because no capability declares a stream")
+                    } else {
+                        format!("`{}`", names.join("`, `"))
+                    }
+                )));
+            }
+        }
+    }
+    Ok(drops)
 }
 
 /// Generate one WIT-derived capability, if the directive asked for it. The
@@ -228,8 +303,8 @@ fn derive(
 /// capability asked for the methods.
 fn emit_streams(boundary: &Boundary, out: &mut String) {
     // Resources the boundary itself declares.
-    let input = boundary.read() || boundary.filesystem;
-    let output = boundary.write() || boundary.filesystem;
+    let input = boundary.input_stream();
+    let output = boundary.output_stream();
     out.push_str(&format!(
         "  (import \"wasi:io/error@{VERSION}\" (instance $io-error\n\
          \x20   (export \"error\" (type (sub resource)))))\n\
@@ -372,6 +447,7 @@ fn emit_memory(boundary: &Boundary, out: &mut String) {
 /// ones do not.
 fn emit_lowering(
     boundary: &Boundary,
+    stream_drops: &[(&str, &str)],
     derived: &[Option<(&str, crate::wit::Generated)>],
     out: &mut String,
 ) {
@@ -411,28 +487,34 @@ fn emit_lowering(
             "  (core func ${name}-l (canon lower (func {func}){extra}))\n"
         ));
     }
+    // Releasing a handle needs no memory: it is one `i32` in, nothing out.
+    for (wit, wat) in stream_drops {
+        out.push_str(&format!(
+            "  (core func {wat}-drop-l (canon resource.drop {wat})) ;; {wit}.drop\n"
+        ));
+    }
     out.push_str("  (core instance $wasi\n");
     for (name, _, _) in &lowered {
         out.push_str(&format!("    (export \"{name}\" (func ${name}-l))\n"));
     }
+    for (wit, wat) in stream_drops {
+        out.push_str(&format!(
+            "    (export \"{wit}.drop\" (func {wat}-drop-l))\n"
+        ));
+    }
     out.push_str("  )\n");
     for (instance, generated) in derived.iter().flatten() {
-        // Every generated lowering takes memory and realloc, whether its
-        // signature visibly needs it or not: handle and record returns
-        // validate only with memory present, and an unused option is
-        // harmless. Verified by `air check` + `air run` on sha256sum.
         for lower in &generated.lowers {
             out.push_str(&format!(
-                "  (core func {}-l (canon lower (func {}) \
-                 (memory $memory) (realloc $realloc)))\n",
-                lower.func, lower.func
+                "  (core func {} (canon {}))\n",
+                lower.core, lower.canon
             ));
         }
         out.push_str(&format!("  (core instance ${instance}\n"));
         for lower in &generated.lowers {
             out.push_str(&format!(
-                "    (export \"{}\" (func {}-l))\n",
-                lower.export, lower.func
+                "    (export \"{}\" (func {}))\n",
+                lower.export, lower.core
             ));
         }
         out.push_str("  )\n");
@@ -458,11 +540,18 @@ mod tests {
 
     /// The boundary of `args` for a program importing `names` from `module`.
     fn try_wat(args: &str, module: &str, names: &[&str]) -> Result<String> {
+        try_wat_all(args, &[(module, names)])
+    }
+
+    /// The same, for a program importing from several modules at once.
+    fn try_wat_all(args: &str, groups: &[(&str, &[&str])]) -> Result<String> {
         let mut imports = Imports::new();
-        imports.insert(
-            module.to_string(),
-            names.iter().map(|name| name.to_string()).collect(),
-        );
+        for (module, names) in groups {
+            imports
+                .entry(module.to_string())
+                .or_default()
+                .extend(names.iter().map(|name| name.to_string()));
+        }
         emit(&parse(args).unwrap(), &imports)
     }
 
@@ -727,6 +816,103 @@ mod tests {
         ] {
             assert!(!text.contains(unwanted), "{unwanted} leaked into:\n{text}");
         }
+    }
+
+    /// A handle is the one thing the canonical ABI cannot release for the
+    /// application, so every resource a capability exports offers
+    /// `<resource>.drop` -- `resource.drop`, not a lowered WIT function.
+    #[test]
+    fn a_resource_the_boundary_exports_can_be_dropped() {
+        let mut names = LISTEN.to_vec();
+        names.push("tcp-socket.drop");
+        names.push("pollable.drop");
+        let text = wat_net("sockets", &names);
+        assert!(
+            text.contains("(alias export $net-tcp \"tcp-socket\" (type $net-tcp-tcp-socket))"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "(core func $net-tcp-tcp-socket-drop-l (canon resource.drop $net-tcp-tcp-socket))"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("(export \"tcp-socket.drop\" (func $net-tcp-tcp-socket-drop-l))"),
+            "{text}"
+        );
+        // `pollable` is defined by `wasi:io/poll`, so that is the interface
+        // that aliases it out -- not `tcp`, which only `use`s it.
+        assert!(
+            text.contains(
+                "(core func $net-poll-pollable-drop-l (canon resource.drop $net-poll-pollable))"
+            ),
+            "{text}"
+        );
+        // Releasing a handle moves no bytes, so unlike a lowering it takes
+        // neither memory nor realloc.
+        assert!(
+            !text.contains("(canon resource.drop $net-tcp-tcp-socket) (memory"),
+            "{text}"
+        );
+    }
+
+    /// A drop keeps its own resource: an application may release a handle it
+    /// never names in a signature, and nothing else has to come along.
+    #[test]
+    fn a_drop_alone_still_declares_its_resource() {
+        let text = wat_net("sockets", &["tcp-socket.drop"]);
+        assert!(
+            text.contains("(export \"tcp-socket\" (type $net-tcp-tcp-socket-t1 (sub resource)))"),
+            "{text}"
+        );
+        assert!(!text.contains("[method]tcp-socket.accept"), "{text}");
+        assert!(!text.contains("\"address-in-use\""), "{text}");
+    }
+
+    /// The stream resources belong to `$wasi`, and follow the same rule. An
+    /// accepted connection hands back an `input-stream` and an
+    /// `output-stream`; a server that never releases them leaks a handle per
+    /// request.
+    #[test]
+    fn the_stream_resources_drop_through_wasi() {
+        let text = try_wat_all(
+            "stdout sockets",
+            &[
+                ("net", LISTEN),
+                ("wasi", &["input-stream.drop", "output-stream.drop"]),
+            ],
+        )
+        .unwrap();
+        assert!(
+            text.contains("(core func $istream-drop-l (canon resource.drop $istream))"),
+            "{text}"
+        );
+        assert!(
+            text.contains("(export \"output-stream.drop\" (func $ostream-drop-l))"),
+            "{text}"
+        );
+        // Nothing asked to drop an error, so nothing does.
+        assert!(!text.contains("$error-drop-l"), "{text}");
+    }
+
+    /// A drop for a resource this boundary never declared is a mistake worth
+    /// naming: the alternative is an unresolved import at link time.
+    #[test]
+    fn dropping_an_undeclared_stream_is_an_error() {
+        let message = try_wat_all("exit", &[("wasi", &["input-stream.drop"])])
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("input-stream.drop"), "{message}");
+        assert!(
+            message.contains("no capability declares a stream"),
+            "{message}"
+        );
+
+        let message = try_wat_all("stdout", &[("wasi", &["input-stream.drop"])])
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("`output-stream`"), "{message}");
     }
 
     /// Both capabilities at once: two instances, two namespaces, one memory.

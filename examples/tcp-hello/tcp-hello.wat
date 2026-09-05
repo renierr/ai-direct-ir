@@ -3,16 +3,24 @@
 ;; `;; @wasi ... sockets` generates the whole boundary: the four
 ;; `wasi:sockets` interfaces this program touches, `wasi:io/poll` for the
 ;; blocking wait, the shared memory and every canonical ABI lowering. The
-;; `(import "net" ...)` lines below decide its extent -- nine functions out of
+;; `(import "net" ...)` lines below decide its extent -- twelve names out of
 ;; the WIT's thirty-nine, and no UDP.
 ;;
 ;; The host still has to grant the network: `wasi:sockets` is linked for every
 ;; component and every call answers `access-denied` until a manifest says
 ;; `network = true` (or the command line says `--net`).
 ;;
-;; It serves exactly one connection and exits. Handles are dropped by the store
-;; when `run` returns, so there is no `resource.drop` here; a long-running
-;; server would need one per accepted connection.
+;; It accepts connections in a loop and stops on `GET /quit`. Each connection
+;; hands back three handles -- the accepted socket and its two streams -- and
+;; each is released with `resource.drop` before the next accept. That is not
+;; housekeeping: dropping the socket is what closes the connection, so a
+;; client only sees end-of-stream because the drop happened. A server that
+;; skipped it would leave every client hanging and leak a handle per request.
+;;
+;; The read buffer is the standing limit. `blocking-read` allocates its
+;; `list<u8>` through the boundary's bump allocator, which never frees, so
+;; roughly the 32KiB between `heap=` and the end of the page is the budget for
+;; the whole run. A real server needs the allocator in `docs/PROJECT.md`.
 ;;
 ;; Memory map (1 page):
 ;;   0x100..0x200 text, packed by `;; @data`
@@ -39,9 +47,14 @@
     (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
     (import "wasi" "exit-with-code" (func $exit (param i32)))
 
-    ;; Nine of the thirty-nine functions `wasi:sockets` declares. A method is
-    ;; named by its resource, because five different resources have a
-    ;; `subscribe`.
+    ;; A resource the boundary declares can be released. The stream resources
+    ;; belong to `$wasi`, because stdio hands them out too.
+    (import "wasi" "input-stream.drop" (func $drop_in (param i32)))
+    (import "wasi" "output-stream.drop" (func $drop_out (param i32)))
+
+    ;; Nine of the thirty-nine functions `wasi:sockets` declares, plus the
+    ;; drops for the two resources this program holds. A method is named by
+    ;; its resource, because five different resources have a `subscribe`.
     (import "net" "instance-network" (func $network (result i32)))
     (import "net" "create-tcp-socket" (func $create (param i32 i32)))
     ;; `ip-socket-address` is a variant, flattened into the parameter list:
@@ -54,7 +67,9 @@
     (import "net" "tcp-socket.finish-listen" (func $finish_listen (param i32 i32)))
     (import "net" "tcp-socket.accept" (func $accept (param i32 i32)))
     (import "net" "tcp-socket.subscribe" (func $subscribe (param i32) (result i32)))
+    (import "net" "tcp-socket.drop" (func $drop_socket (param i32)))
     (import "net" "pollable.block" (func $block (param i32)))
+    (import "net" "pollable.drop" (func $drop_pollable (param i32)))
 
     ;; @data 0x100..0x200
     (data $body
@@ -65,6 +80,8 @@
       "\r\n"
       "hello, air!\n")
     (data $ready "tcp-hello: listening on 127.0.0.1:8125\n")
+    (data $bye "tcp-hello: /quit\n")
+    (data $quit "GET /quit")
     (data $failed "tcp-hello: wasi:sockets error-code ")
 
     (func $print (param $p i32) (param $n i32)
@@ -99,11 +116,31 @@
       (call $exit (i32.const 1))
       (unreachable))
 
+    ;; Whether the `$n` bytes at `$p` begin with the `$qn` bytes at `$q`.
+    (func $starts_with
+      (param $p i32) (param $n i32) (param $q i32) (param $qn i32) (result i32)
+      (local $i i32)
+      (if (i32.lt_u (local.get $n) (local.get $qn))
+        (then (return (i32.const 0))))
+      (block $done
+        (loop $next
+          (br_if $done (i32.ge_u (local.get $i) (local.get $qn)))
+          (if (i32.ne
+                (i32.load8_u (i32.add (local.get $p) (local.get $i)))
+                (i32.load8_u (i32.add (local.get $q) (local.get $i))))
+            (then (return (i32.const 0))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $next)))
+      (i32.const 1))
+
     (func (export "run") (result i32)
       (local $net i32)
       (local $sock i32)
+      (local $poll i32)
+      (local $conn i32)
       (local $in i32)
       (local $out i32)
+      (local $len i32)
 
       (local.set $net (call $network))
 
@@ -141,26 +178,55 @@
 
       (call $print (global.get $ready.ptr) (global.get $ready.len))
 
-      ;; WASI 0.2 has no blocking accept: subscribe to the socket and block on
-      ;; the pollable until a connection is waiting.
-      (call $block (call $subscribe (local.get $sock)))
+      ;; WASI 0.2 has no blocking accept: subscribe to the listening socket and
+      ;; block on the pollable until a connection is waiting. One pollable
+      ;; serves every accept, so it is created once, outside the loop.
+      (local.set $poll (call $subscribe (local.get $sock)))
 
-      ;; accept -> result<tuple<own<tcp-socket>, own<input-stream>,
-      ;;                        own<output-stream>>, error-code>
-      (call $accept (local.get $sock) (i32.const 0x250))
-      (if (i32.eqz (call $ok (i32.const 0x250)))
-        (then (call $die (i32.const 0x250) (i32.const 4))))
-      (local.set $in (i32.load (i32.const 0x258)))
-      (local.set $out (i32.load (i32.const 0x25c)))
+      (block $stop
+        (loop $serve
+          (call $block (local.get $poll))
 
-      ;; An accepted connection is an ordinary `input-stream`, drained with the
-      ;; same `blocking-read` stdin uses. One read is enough for a request line.
-      (call $read (local.get $in) (i64.const 4096) (i32.const 0x280))
+          ;; accept -> result<tuple<own<tcp-socket>, own<input-stream>,
+          ;;                        own<output-stream>>, error-code>
+          (call $accept (local.get $sock) (i32.const 0x250))
+          (if (i32.eqz (call $ok (i32.const 0x250)))
+            (then (call $die (i32.const 0x250) (i32.const 4))))
+          (local.set $conn (i32.load (i32.const 0x254)))
+          (local.set $in (i32.load (i32.const 0x258)))
+          (local.set $out (i32.load (i32.const 0x25c)))
 
-      (call $write (local.get $out)
-        (global.get $body.ptr) (global.get $body.len)
-        (i32.const 0x290))
-      (i32.load8_u (i32.const 0x290)))
+          ;; An accepted connection is an ordinary `input-stream`, drained with
+          ;; the same `blocking-read` stdin uses. One read is enough for a
+          ;; request line; a client that hung up first reads as an error, and
+          ;; an empty request matches no path.
+          (call $read (local.get $in) (i64.const 4096) (i32.const 0x280))
+          (local.set $len
+            (select (i32.load (i32.const 0x288)) (i32.const 0)
+                    (call $ok (i32.const 0x280))))
+
+          ;; A failed write here means the client left; that is its business,
+          ;; not a reason to stop serving.
+          (call $write (local.get $out)
+            (global.get $body.ptr) (global.get $body.len)
+            (i32.const 0x290))
+
+          ;; Three handles came in with this connection and three go back out.
+          ;; The streams first: they borrow the socket the drop below closes.
+          (call $drop_out (local.get $out))
+          (call $drop_in (local.get $in))
+          (call $drop_socket (local.get $conn))
+
+          (br_if $stop
+            (call $starts_with
+              (i32.load (i32.const 0x284)) (local.get $len)
+              (global.get $quit.ptr) (global.get $quit.len)))
+          (br $serve)))
+
+      (call $print (global.get $bye.ptr) (global.get $bye.len))
+      (call $drop_pollable (local.get $poll))
+      (call $drop_socket (local.get $sock))
+      (i32.const 0))
   )
   (core instance $app (instantiate $main
     (with "env" (instance $mem))

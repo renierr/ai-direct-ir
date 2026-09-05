@@ -272,11 +272,33 @@ fn connect(addr: &str) -> std::net::TcpStream {
     panic!("nothing listening on {addr}");
 }
 
+/// One request against `tcp-hello`, read to end of stream. Reading to EOF is
+/// the point: the response carries a `Content-Length`, so a client could stop
+/// early -- this waits for the close, which only happens when the component
+/// drops the accepted socket.
+fn request(path: &str) -> String {
+    let mut socket = connect("127.0.0.1:8125");
+    socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("set read timeout");
+    socket
+        .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+        .expect("send request");
+    let mut response = String::new();
+    std::io::Read::read_to_string(&mut socket, &mut response).expect("read response");
+    response
+}
+
 /// The WIT-derived `wasi:sockets` boundary, end to end: a component that owns
-/// its own listening socket, accepts one connection through `pollable.block`,
-/// and answers on the accepted `output-stream`.
+/// its own listening socket, accepts connections through `pollable.block`,
+/// answers on the accepted `output-stream`, and releases all three handles
+/// with `resource.drop` before the next accept.
+///
+/// Two requests on separate connections is what proves the drops. Each is read
+/// to end of stream, which arrives only because the accepted `tcp-socket` was
+/// dropped, and the second is accepted only because the loop came back around.
 #[test]
-fn tcp_hello_example_serves_one_connection() {
+fn tcp_hello_example_serves_connections_until_told_to_stop() {
     let _shared = examples_lock();
     let repo = repo();
     // Build first: `run` would rebuild too, but then build progress and the
@@ -284,7 +306,7 @@ fn tcp_hello_example_serves_one_connection() {
     let built = run(&repo, &["build", "examples/tcp-hello/host.toml"]);
     assert!(built.status.success(), "build failed: {}", stderr(&built));
 
-    let mut child = Command::new(air_bin())
+    let child = Command::new(air_bin())
         .args(["run", "examples/tcp-hello/host.toml"])
         .current_dir(&repo)
         .stdout(Stdio::piped())
@@ -292,19 +314,25 @@ fn tcp_hello_example_serves_one_connection() {
         .spawn()
         .expect("spawn air");
 
-    let mut socket = connect("127.0.0.1:8125");
-    socket
-        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        .expect("send request");
-    let mut response = String::new();
-    std::io::Read::read_to_string(&mut socket, &mut response).expect("read response");
+    let first = request("/");
+    assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "{first}");
+    assert!(first.ends_with("\r\n\r\nhello, air!\n"), "{first}");
+    let second = request("/again");
+    assert_eq!(second, first, "the loop must serve a second connection");
+
+    // `/quit` is the only thing that ends the run.
+    let last = request("/quit");
+    assert!(last.ends_with("hello, air!\n"), "{last}");
 
     let out = child.wait_with_output().expect("wait for air");
     assert!(out.status.success(), "run failed: {}", stderr(&out));
-    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
-    assert!(response.ends_with("\r\n\r\nhello, air!\n"), "{response}");
     assert!(
         stdout(&out).contains("listening on 127.0.0.1:8125"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("tcp-hello: /quit"),
         "{}",
         stdout(&out)
     );
@@ -345,19 +373,14 @@ fn a_component_reaches_the_network_only_when_granted() {
     );
 
     // `--net` is the shell-side grant, and it is enough on its own.
-    let mut child = Command::new(air_bin())
+    let child = Command::new(air_bin())
         .args(["run", "--net", "host.toml"])
         .current_dir(&project)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn air");
-    let mut socket = connect("127.0.0.1:8125");
-    socket
-        .write_all(b"GET / HTTP/1.1\r\n\r\n")
-        .expect("send request");
-    let mut response = String::new();
-    std::io::Read::read_to_string(&mut socket, &mut response).expect("read response");
+    let response = request("/quit");
     let out = child.wait_with_output().expect("wait for air");
     assert!(out.status.success(), "run failed: {}", stderr(&out));
     assert!(response.ends_with("hello, air!\n"), "{response}");
@@ -902,6 +925,34 @@ fn an_unknown_fs_import_is_rejected() {
     let message = stderr(&built);
     assert!(message.contains("get-directoriez"), "{message}");
     assert!(message.contains("wasi:filesystem"), "{message}");
+}
+
+/// A drop is only offered for a resource the boundary declares. Asking to
+/// release one it never handed out would otherwise surface as an unresolved
+/// core import, well away from the line that asked.
+#[test]
+fn dropping_a_resource_the_boundary_never_declared_is_rejected() {
+    let project = scaffold_target("wasi-drop-undeclared", "component");
+    set_wasi_directive(&project, "stdout");
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    std::fs::write(
+        &root,
+        source.replace(
+            "    (import \"wasi\" \"write\" (func $write (param i32 i32 i32 i32)))",
+            "    (import \"wasi\" \"write\" (func $write (param i32 i32 i32 i32)))\n\
+             \x20   (import \"wasi\" \"input-stream.drop\" (func $drop-in (param i32)))",
+        ),
+    )
+    .expect("write root wat");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "an undeclared drop must not build");
+    let message = stderr(&built);
+    assert!(message.contains("input-stream.drop"), "{message}");
+    // `stdout` declares only the output stream, and the error says so.
+    assert!(message.contains("`output-stream`"), "{message}");
+    assert!(message.contains("app.wat"), "{message}");
 }
 
 /// A misspelled capability stops the build and names the line that asked for

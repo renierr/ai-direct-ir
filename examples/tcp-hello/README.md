@@ -1,11 +1,13 @@
 # tcp-hello
 
-A WASI 0.2 component that opens its own listening socket, serves one HTTP
-request, and exits.
+A WASI 0.2 component that opens its own listening socket, serves HTTP requests
+in a loop, and stops when one asks it to.
 
 ```bash
 air run examples/tcp-hello/host.toml     # then, from another shell:
 curl -i http://127.0.0.1:8125/
+curl -i http://127.0.0.1:8125/           # again: the loop came back around
+curl -i http://127.0.0.1:8125/quit       # answered, then the run ends
 ```
 
 ```
@@ -20,10 +22,11 @@ hello, air!
 ## What it proves
 
 - **`wasi:sockets` from WIT, at the size the program asks for.** The WIT
-  declares 39 functions across seven interfaces. `tcp-hello.wat` imports nine,
-  and nine is what the generated boundary declares — no UDP, no name lookup,
-  no keep-alive timers, and no `wasi:clocks/monotonic-clock` that only the
-  keep-alive setters would have needed. One `error-code` enum is declared by
+  declares 39 functions across seven interfaces. `tcp-hello.wat` imports nine
+  of them plus two drops, and that is what the generated boundary declares — no
+  UDP, no name lookup, no keep-alive timers, and no
+  `wasi:clocks/monotonic-clock` that only the keep-alive setters would have
+  needed. One `error-code` enum is declared by
   `wasi:sockets/network` and aliased into the interfaces that share it.
 - **A method is named by its resource.** `tcp-socket.subscribe`, not
   `subscribe`: five different resources in `wasi:sockets` have one. The
@@ -37,6 +40,11 @@ hello, air!
   `net.*` host syscalls exist because Core WASM had no sockets; nothing in
   this example goes through them. WASI 0.2 has no blocking accept, so the
   program subscribes to the socket and blocks on the `pollable`.
+- **A handle is released by the program that owns it.** Every resource the
+  boundary declares offers `<resource>.drop`, and this is the example that
+  needs it: an accepted connection is three handles, released before the next
+  accept. The socket's drop is what closes the connection — comment it out and
+  a client reading to end of stream waits forever.
 
 ## Layout
 
@@ -45,13 +53,35 @@ hello, air!
 | `tcp-hello.wat` | the whole application: bind, listen, accept, answer |
 | `host.toml` | `network = true` grants the sockets capability |
 
-## Why one connection
+## Three handles per connection
 
-Every accepted connection is three resource handles — the socket and its two
-streams — and dropping them needs a `(canon resource.drop ...)` per type. A
-program that serves one request and exits lets the store drop them instead,
-which keeps the example about sockets. A long-running server needs the drops,
-and that is the next thing this example would grow.
+`tcp-socket.accept` returns a tuple of three owned handles: the connected
+socket, its `input-stream` and its `output-stream`. Nothing in the canonical
+ABI releases them — a handle is the one thing the component itself has to give
+back — so the loop ends with
+
+```wat
+(call $drop_out (local.get $out))
+(call $drop_in (local.get $in))
+(call $drop_socket (local.get $conn))
+```
+
+The stream resources come from `$wasi`, because stdio hands them out too; the
+socket comes from `$net`. Both spell the drop the same way, `<resource>.drop`,
+and both appear in the boundary only because the program imports them.
+
+Dropping the socket is what closes the TCP connection, so the drops are load
+bearing rather than tidy: without them the first client never sees end of
+stream and the run leaks a handle per request.
+
+## What still limits it
+
+`blocking-read` allocates its `list<u8>` through the boundary's bump
+allocator, which never frees. With the default `heap=0x8000` inside one page
+that is roughly 32KiB for the whole run — a few hundred requests. A server
+meant to stay up needs the real allocator in `docs/PROJECT.md`, not a bigger
+page. One `blocking-read` is also assumed to carry the whole request line,
+which is true of every client here and not true in general.
 
 ## The fifteen-parameter bind
 

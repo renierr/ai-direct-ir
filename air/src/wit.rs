@@ -28,6 +28,12 @@
 //!   An application links it like the WASI one: `(with "fs" (instance $fs))`
 //!   and imports the names `import_name` derives — `"descriptor.open-at"`,
 //!   `"get-directories"`.
+//!
+//! Alongside the functions, each exported resource offers `<resource>.drop`
+//! (`"descriptor.drop"`, `"tcp-socket.drop"`). It is a canonical builtin
+//! rather than a WIT function, but a handle is the one thing the canonical ABI
+//! cannot release on the application's behalf, so a program that opens handles
+//! in a loop needs it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -38,13 +44,16 @@ const CLOCKS_WIT: &str = include_str!("../wit/wasi-0.2.12/clocks.wit");
 const FILESYSTEM_WIT: &str = include_str!("../wit/wasi-0.2.12/filesystem.wit");
 const SOCKETS_WIT: &str = include_str!("../wit/wasi-0.2.12/sockets.wit");
 
-/// One lowered function: the name the application imports from the
-/// capability's instance (see `import_name`) and the component-level function
-/// it lowers. Every lowering takes `(memory $memory) (realloc $realloc)`, so
-/// there is nothing per-function to decide (see `emit_func`).
+/// One entry of a capability's core instance: the name the application imports
+/// (see `import_name`), the Core function it is, and the `canon` definition
+/// behind it -- `lower` for a WIT function, `resource.drop` for a handle
+/// release. The `canon` text names `$memory` and `$realloc`, which
+/// `boundary.rs` defines and documents; the generated WAT is written against
+/// that ABI the same way it is written against `$istream`.
 pub struct Lower {
     pub export: String,
-    pub func: String,
+    pub core: String,
+    pub canon: String,
 }
 
 /// One generated boundary: import text plus aliases, and the lowering list
@@ -184,20 +193,30 @@ pub fn generate(capability: &Capability, used: &BTreeSet<String>) -> wasmtime::R
     // the WIT's whole catalogue as the only hint.
     let catalog = catalog(&resolve, capability, &ids)?;
     let mut wanted: HashSet<String> = HashSet::new();
+    let mut dropped: HashSet<TypeId> = HashSet::new();
     for name in used {
-        let Some((_, wit_name)) = catalog.get(name) else {
-            return Err(wasmtime::Error::msg(format!(
-                "`(import \"{}\" \"{name}\" ...)` names no `{}` function; \
-                 the boundary exports only what `{}` declares",
-                capability.instance, capability.package, capability.source
-            )));
-        };
-        wanted.insert(wit_name.clone());
+        match catalog.get(name) {
+            Some((_, Entry::Func(wit_name))) => {
+                wanted.insert(wit_name.clone());
+            }
+            Some((_, Entry::Drop(resource))) => {
+                dropped.insert(*resource);
+            }
+            None => {
+                return Err(wasmtime::Error::msg(format!(
+                    "`(import \"{}\" \"{name}\" ...)` names no `{}` function; \
+                     the boundary exports only what `{}` declares, plus \
+                     `<resource>.drop` for each resource it exports",
+                    capability.instance, capability.package, capability.source
+                )));
+            }
+        }
     }
     // Types the wanted signatures reach, and nothing else: the 37-case
     // `error-code` enums and the `descriptor-stat` record cost real bytes in
-    // every artifact that declares them.
-    let mut keep: HashSet<TypeId> = HashSet::new();
+    // every artifact that declares them. A dropped resource keeps itself: the
+    // application may release a handle it never names in a signature.
+    let mut keep: HashSet<TypeId> = dropped.clone();
     for id in &ids {
         for (wit_name, func) in &resolve.interfaces[*id].functions {
             if wanted.contains(wit_name) {
@@ -271,7 +290,7 @@ pub fn generate(capability: &Capability, used: &BTreeSet<String>) -> wasmtime::R
             foreign.insert(target, alias);
         }
         let mut emitter = Emitter::new(&resolve, &var, foreign);
-        lowers.extend(emitter.emit_interface(*id, &var, &keep, &wanted)?);
+        lowers.extend(emitter.emit_interface(*id, &var, &keep, &wanted, &dropped)?);
         out.push_str(&emitter.finish_instance(&var, iface.wit));
         for alias in &emitter.aliases {
             out.push_str(alias);
@@ -303,28 +322,56 @@ fn resolve() -> wasmtime::Result<Resolve> {
     Ok(resolve)
 }
 
-/// Every function `capability` offers, keyed by the name it takes in the flat
-/// instance namespace. Two interfaces must not offer the same name: the
-/// application imports one instance.
+/// What one importable name of a capability denotes.
+enum Entry {
+    /// A WIT function, by its export key (`[method]tcp-socket.accept`).
+    Func(String),
+    /// A resource whose handle the application wants to release.
+    Drop(TypeId),
+}
+
+/// Every name `capability` offers, keyed as it appears in the flat instance
+/// namespace. Two interfaces must not offer the same name: the application
+/// imports one instance.
+///
+/// Alongside the functions, every exported resource offers `<resource>.drop`.
+/// A handle is the one thing a component holds that the canonical ABI cannot
+/// release for it, and `resource.drop` is a canonical builtin rather than a
+/// WIT function, so it has no export key of its own -- but it reads like a
+/// method and is named like one.
 fn catalog(
     resolve: &Resolve,
     capability: &Capability,
     ids: &[InterfaceId],
-) -> wasmtime::Result<BTreeMap<String, (InterfaceId, String)>> {
-    let mut catalog = BTreeMap::new();
+) -> wasmtime::Result<BTreeMap<String, (InterfaceId, Entry)>> {
+    let mut catalog: BTreeMap<String, (InterfaceId, Entry)> = BTreeMap::new();
+    let mut insert = |name: String, id: InterfaceId, entry: Entry| match catalog.entry(name) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert((id, entry));
+            Ok(())
+        }
+        std::collections::btree_map::Entry::Occupied(slot) => Err(wasmtime::Error::msg(format!(
+            "`{}` and `{}` both export `{}`; cannot share one `${}` namespace",
+            resolve.id_of(slot.get().0).unwrap_or_default(),
+            resolve.id_of(id).unwrap_or_default(),
+            slot.key(),
+            capability.instance,
+        ))),
+    };
     for (iface, id) in capability.interfaces.iter().zip(ids) {
         if !iface.functions {
             continue;
         }
         for wit_name in resolve.interfaces[*id].functions.keys() {
-            let name = import_name(wit_name).to_string();
-            if let Some((other, _)) = catalog.insert(name.clone(), (*id, wit_name.clone())) {
-                return Err(wasmtime::Error::msg(format!(
-                    "`{}` and `{}` both export `{name}`; cannot share one `${}` namespace",
-                    resolve.id_of(other).unwrap_or_default(),
-                    resolve.id_of(*id).unwrap_or_default(),
-                    capability.instance,
-                )));
+            insert(
+                import_name(wit_name).to_string(),
+                *id,
+                Entry::Func(wit_name.clone()),
+            )?;
+        }
+        for (name, type_id) in &resolve.interfaces[*id].types {
+            if matches!(resolve.types[*type_id].kind, TypeDefKind::Resource) {
+                insert(format!("{name}.drop"), *id, Entry::Drop(*type_id))?;
             }
         }
     }
@@ -486,16 +533,18 @@ impl<'a> Emitter<'a> {
 
     /// Emit one imported instance: every type the WIT interface exports, then
     /// every function, collecting the component-level aliases for lowering.
-    /// `keep` and `wanted` narrow the interface to what an application asked
-    /// for: only the named functions, and only the types their signatures
-    /// reach. Interface order is preserved either way, and WIT declares before
-    /// use, so the kept types still arrive in dependency order.
+    /// `keep`, `wanted` and `dropped` narrow the interface to what an
+    /// application asked for: only the named functions, the resources it
+    /// releases, and only the types their signatures reach. Interface order is
+    /// preserved either way, and WIT declares before use, so the kept types
+    /// still arrive in dependency order.
     fn emit_interface(
         &mut self,
         id: InterfaceId,
         instance: &str,
         keep: &HashSet<TypeId>,
         wanted: &HashSet<String>,
+        dropped: &HashSet<TypeId>,
     ) -> wasmtime::Result<Vec<Lower>> {
         self.instance = instance.to_string();
         // Types first, in interface order: WIT declares before use.
@@ -505,8 +554,8 @@ impl<'a> Emitter<'a> {
             .filter(|(_, type_id)| keep.contains(type_id))
             .map(|(name, type_id)| (name.clone(), *type_id))
             .collect();
-        for (name, type_id) in type_names {
-            self.emit_type(id, &name, type_id)?;
+        for (name, type_id) in &type_names {
+            self.emit_type(id, name, *type_id)?;
         }
         // Functions in interface order.
         let funcs: Vec<(String, wit_parser::Function)> = self.resolve.interfaces[id]
@@ -519,7 +568,31 @@ impl<'a> Emitter<'a> {
         for (wit_name, func) in &funcs {
             lowers.push(self.emit_func(id, wit_name, func)?);
         }
+        // A resource this interface defines and the application releases. Only
+        // the defining interface emits it: elsewhere the same resource is a
+        // `use` alias, whose `TypeId` is not the one `dropped` holds.
+        for (name, type_id) in &type_names {
+            if dropped.contains(type_id) {
+                lowers.push(self.emit_drop(name));
+            }
+        }
         Ok(lowers)
+    }
+
+    /// Emit the release of one resource: alias the instance's exported type
+    /// out, then bind `resource.drop` on it. Unlike a lowering this takes no
+    /// memory -- a handle is one `i32` and nothing crosses linear memory.
+    fn emit_drop(&mut self, name: &str) -> Lower {
+        let ty = format!("{}-{name}", self.prefix);
+        self.aliases.push(format!(
+            "  (alias export {} \"{name}\" (type {ty}))",
+            self.instance
+        ));
+        Lower {
+            export: format!("{name}.drop"),
+            core: format!("{ty}-drop-l"),
+            canon: format!("resource.drop {ty}"),
+        }
     }
 
     /// Assemble the `(import ...)` for everything emitted so far. Each
@@ -819,7 +892,12 @@ impl<'a> Emitter<'a> {
         ));
         Ok(Lower {
             export: import,
-            func: alias,
+            core: format!("{alias}-l"),
+            // Every generated lowering takes memory and realloc, whether its
+            // signature visibly needs it or not: handle and record returns
+            // validate only with memory present, and an unused option is
+            // harmless.
+            canon: format!("lower (func {alias}) (memory $memory) (realloc $realloc)"),
         })
     }
 }

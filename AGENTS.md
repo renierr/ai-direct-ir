@@ -55,7 +55,8 @@ generic design changes.
   every manifest declares `source`, so the artifact is rebuilt from the WAT
 - `examples/server/` — `server.wat`, `manifest.toml`, `www/` demo root
 - `examples/tcp-hello/` — a component that binds its own socket through
-  `wasi:sockets`; `examples/sha256sum/` — the same for `wasi:filesystem`
+  `wasi:sockets` and serves an accept loop; `examples/sha256sum/` — the same
+  for `wasi:filesystem`
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` (`sha2`) and
   `libs/text-width/` (`unicode-width`) — Rust crates
 - `native/` and `tools/` — legacy experiments; `docs/PROJECT.md` — living state
@@ -118,9 +119,13 @@ Start with `air inspect <file>`.
   a transcribed type graph.
 - Nothing is reachable unless it asks. `wasi:sockets` is linked for every
   component and answers `access-denied` until `network = true` in the manifest
-  or `air run --net` grants it — the same rule as `[[dirs]]` and `--dir`. The
-  generated boundary emits no `resource.drop` yet, so a component cannot close
-  a handle it owns; `examples/tcp-hello/` serves one connection and exits.
+  or `air run --net` grants it — the same rule as `[[dirs]]` and `--dir`.
+- A resource the boundary declares can be released: import `<resource>.drop`.
+  The stream resources come from `"wasi"` (`"input-stream.drop"`), a
+  capability's own from its instance (`"tcp-socket.drop"`). It is opt-in like
+  every other name, and dropping something the boundary never declared fails
+  the build. `examples/tcp-hello/` shows why it matters: dropping the accepted
+  socket is what closes the connection.
 - A WASI interface `;; @wasi` does not name is still available: declare the
   import by hand. `air` links the whole WASI 0.2 set, so the directive is a
   shorthand for the common boundary, never a gate. See `examples/sha256sum/`.

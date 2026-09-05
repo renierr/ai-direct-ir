@@ -201,8 +201,11 @@ rely on them:
 | `$net` | the same for `wasi:sockets` — `(with "net" (instance $net))`, `"create-tcp-socket"`, `"tcp-socket.accept"`, `"pollable.block"` |
 
 `$wasi` exports one Core function per capability: `get-stdin`, `read`,
-`get-stdout`, `get-stderr`, `write`, `get-arguments`, `exit`. Everything below
-the directive is ordinary Core WAT.
+`get-stdout`, `get-stderr`, `write`, `get-arguments`, `exit`. It also releases
+handles: a resource the boundary declares can be dropped by importing
+`<resource>.drop` — `"input-stream.drop"` and `"output-stream.drop"` from
+`"wasi"`, `"tcp-socket.drop"` and `"descriptor.drop"` from the capability
+instances. Everything below the directive is ordinary Core WAT.
 
 Every generated line reports the directive as its origin, so a validator
 complaint about the boundary points at the line the author wrote rather than at
@@ -277,10 +280,51 @@ before this every `wasi:sockets` call would have answered `access-denied`.
 same category as `--dir`: WASI defines the interface, not the answer.
 
 `examples/tcp-hello/` is the proof: it binds 127.0.0.1:8125, blocks on a
-`pollable`, accepts one connection, answers on the accepted `output-stream`,
-and exits. It imports nine of the 39 functions and its artifact is 5859 bytes.
-`air/tests/cli.rs` drives it over a real socket and checks that removing the
-grant stops the run at `create-tcp-socket` with error-code 1.
+`pollable`, accepts connections in a loop, answers on each accepted
+`output-stream`, releases the three handles the accept handed it, and stops on
+`GET /quit`. It imports nine of the 39 functions plus two drops, and its
+artifact is 6567 bytes. `air/tests/cli.rs` drives it over a real socket for two
+connections — the second is served only because the first was released — and
+checks that removing the grant stops the run at `create-tcp-socket` with
+error-code 1.
+
+#### Releasing handles
+
+A handle is the one thing a component holds that the canonical ABI cannot give
+back for it. Lowering and lifting cross linear memory automatically; a resource
+handle is a table entry, and only the program that owns it knows when it is
+done. So every resource a boundary declares also offers `<resource>.drop`:
+
+```wat
+(import "net" "tcp-socket.drop" (func $drop_socket (param i32)))
+(import "wasi" "input-stream.drop" (func $drop_in (param i32)))
+```
+
+It is spelled like a method because it reads like one, but it is
+`(canon resource.drop <type>)` — a canonical builtin, not a WIT function, and
+the one entry in a capability instance with no WIT export key behind it. It
+takes no memory or realloc: a handle is one `i32` in and nothing out.
+
+Two rules keep it in line with the rest of the boundary. It is opt-in by
+import, like every generated function, so no artifact grew: rebuilding all nine
+examples after this landed changed only `tcp-hello.wasm`. And a drop for a
+resource the boundary never declared is a build error naming the line, rather
+than an unresolved core import discovered at link time.
+
+The stream resources are the one case that crosses instances. `input-stream`
+and `output-stream` are declared by the hand-written `wasi:io` part of the
+boundary, because stdio hands them out too, so their drops live in `$wasi`
+while `tcp-socket.drop` lives in `$net`. That makes `$wasi` the one instance
+whose contents are decided by both the directive and the imports — deliberately:
+dropping is not a capability, it releases a handle the program already holds,
+and only the program can say which.
+
+`examples/tcp-hello/` is what needed this. An accepted connection is three
+owned handles, and dropping the socket is what closes the TCP connection, so
+the drops are load bearing rather than tidy — without them the first client
+never sees end of stream and the loop leaks a handle per request. Its artifact
+went from 5859 to 6567 bytes for the accept loop, the `/quit` check, and the
+three drops.
 
 Converting the four component sources removed 208 lines and changed no
 behavior:
@@ -346,6 +390,16 @@ passes, `air run` binds 127.0.0.1:8125 and answers a real `curl`, and
 tests pin that the boundary declares nine of the WIT's 39 functions, shares one
 `error-code` declaration across the TCP interfaces, and carries no UDP.
 
+Handle release was verified the same way. The example now accepts in a loop and
+drops the accepted socket and its two streams each time; `air/tests/cli.rs`
+serves two connections and reads each to end of stream, which only arrives
+because the socket was dropped. Commenting the socket drop out was checked
+directly: a client reading to end of stream waits 4s and times out instead of
+finishing in 3ms. Unit tests pin the emitted `(canon resource.drop ...)`, that
+a drop alone declares its resource without dragging in the interface's other
+types, and that a drop for an undeclared resource is an error. Rebuilding every
+example afterwards changed only `tcp-hello.wasm`.
+
 Fresh native, browser, and GUI scaffolds have completed their applicable
 `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
@@ -360,10 +414,12 @@ rebuild.
   provider boundary.
 - `ui.*` is not available to components: its signatures pass raw pointers and
   need value-based replacements first.
-- The generated boundary emits no `(canon resource.drop ...)`, so a component
-  cannot close a handle it owns. Handles are released when the store drops,
-  which is why `examples/tcp-hello/` serves one connection and exits. A
-  long-running server needs one drop per resource type it accepts.
+- A long-running component still has no allocator. The boundary's `cabi_realloc`
+  is a bump allocator that never frees, so every host-produced value — a read
+  buffer, an argument list — is permanent. `examples/tcp-hello/` accepts in a
+  loop and releases its handles, but each request's `blocking-read` costs heap
+  it never gets back: roughly 32KiB for the whole run at the default `heap=`.
+  See Next Work item 2.
 - `mode = "server"` and the `net.*` host syscalls are now redundant for
   components, which bind their own sockets through `wasi:sockets`. They remain
   because `examples/server/` is a Core app that links `libs/http/http.wasm`,
@@ -727,12 +783,14 @@ being specification-only before more specification is written.
 1. Extend the WIT-driven boundary to the remaining interfaces and provider
     contracts. `filesystem` and `sockets` are generated from the vendored WASI
     WIT; `wasi:clocks`, `wasi:random` and the catalog's provider WIT still go
-    through hand-written declarations. Both the granularity rule (the
-    application's own imports name what to generate) and the naming rule (the
-    WIT export key, minus its bracketed kind) are settled, so a new interface
-    is a table entry. Emitting `(canon resource.drop ...)` is the one real
-    piece of work left in this area, and `examples/tcp-hello/` is what needs
-    it. See The Boundary From WIT and What Actually Needs A Harness Change.
+    through hand-written declarations. The granularity rule (the application's
+    own imports name what to generate), the naming rule (the WIT export key,
+    minus its bracketed kind) and handle release (`<resource>.drop`) are all
+    settled, so a new WASI interface is now a table entry in `air/src/wit.rs`
+    and nothing else. What is left is not WASI: a provider's WIT arrives as a
+    file rather than a vendored constant, and the emitter has never been
+    pointed at one. See The Boundary From WIT and What Actually Needs A Harness
+    Change.
 2. Continue up the memory ladder: records with named fields, then an
    allocator. Segment addresses are handled (see Harness-Placed Segments), but
    an application with dynamic collections needs both, and neither should be
@@ -741,7 +799,7 @@ being specification-only before more specification is written.
 3. Give `ui.*` value-based signatures so components can import it, then
    convert `gui-hello`. `term.*` already made the trip as
    `ai-direct:host/term`; `net.*` needs no trip, because a component reaches
-   `wasi:sockets` directly.
+   `wasi:sockets` directly and now releases what it accepts.
 4. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing. See Provider Linking above.
 5. Add a separate component consumer proof in the mail example. Do not force
