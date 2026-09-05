@@ -75,9 +75,11 @@ Start with `air inspect <file>`.
 - WAT: memory map in the file header comment; lib address maps are ABI.
 - `;; @include <path>` splits a root WAT into fragments. Paths are relative to
   the root source's directory at every depth, never absolute and never `..`.
-- Never hand-write a string length. Name the segment — `(data $msg (i32.const
-  0x1000) "...")` — and read `$msg.ptr` / `$msg.len`, which `air` derives.
-  Named segments need a literal offset and may not overlap.
+- Never hand-write a string length or a string address. Name the segment and
+  read `$msg.ptr` / `$msg.len`, which `air` derives. Declare `;; @data
+  <start>..<end>` once and leave named segments unplaced — `(data $msg "...")`
+  — and `air` packs them in source order. A segment that states a literal
+  offset keeps it; placed and unplaced segments may not overlap.
 - Manifest per app, next to its modules; `air init` scaffolds it. Name it
   `host.toml` so the project directory is the argument.
 - Prefer `target = "component"` (WASI 0.2) for new work; it is the default and

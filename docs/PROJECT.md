@@ -126,17 +126,37 @@ Named segments work in a plain `(module ...)` app and in a `(core module ...)`
 inside a component; each module's segments are checked for overlap against that
 module's own memory.
 
-Unnamed segments are untouched, so naming is the opt-in. The scaffolds, the
-`hello`, `pi`, and `gui-hello` examples, and the mail example use named
-segments;
-`pi`, `prompts`, `prompts-raw`, and `server` still pack tables at
-hand-assigned addresses and have not been converted.
+Unnamed segments are untouched, so naming is the opt-in.
 
-Addresses are still author-owned. Letting the harness assign them as well would
-remove the other hand-maintained number — `examples/prompts/prompts.wat` chains
-addresses so that each depends on the previous string's length — but that means
-the harness owning the memory map, which the `[[libs]]` shared-memory address
-maps also depend on. That is a separate decision.
+### Harness-Placed Segments
+
+The length was only half of it. An author who names a segment still had to
+assign its address, and because segments pack tightly, each address depended on
+the previous string's length — so inserting one word moved every string after
+it. Declaring a region hands that over:
+
+```wat
+;; @data 0x1000..0x8000
+(data $intro "\u{25c6} prompts demo\n")
+(data $ask-name "\u{25c7} Project name? ")
+```
+
+A named segment with no offset is placed inside the region, packed in source
+order; a named segment that states an offset keeps it. The memory map stays
+author-owned — the region is the one range handed over, not the whole memory,
+because the harness cannot see the scratch addresses, buffers and `[[libs]]` ABI
+maps an application also uses. Three things are errors rather than guesses: an
+unplaced segment with no region declared, a region too small for its segments,
+and a region that would run over a segment the author placed.
+
+Converting `examples/prompts/prompts.wat` removed 29 hand-assigned addresses and
+29 hand-written lengths — and fixed two live bugs the conversion exposed. The
+audit found `\u{2716} Cancelled.\n` printed with a stated length of 14 against an
+actual 15, so the program silently dropped the trailing newline, and the
+input-closed message read 25 bytes of a 24-byte string. Both had passed
+validation, run correctly enough to ship, and survived every previous reading of
+the file. That is the whole argument for moving these numbers into the harness,
+stated by the example that had them.
 
 ### The Generated WASI Boundary
 
@@ -424,12 +444,11 @@ being specification-only before more specification is written.
    test. It can be hand-authored the way `examples/provider-demo/` is, so no
    Rust component toolchain is needed; `libs/sha256/` stays the reference to
    check the result against. Runtime provider linking already consumes it.
-2. Take the next hand-maintained detail after the boundary: memory layout.
-   Records with named fields and a real allocator, so an application stops
-   assigning addresses by hand. `examples/prompts/prompts.wat` chains string
-   addresses so each depends on the previous string's length, and that is the
-   pattern that will not survive an application with dynamic collections. See
-   The Generated WASI Boundary above for the method.
+2. Continue up the memory ladder: records with named fields, then an
+   allocator. Segment addresses are handled (see Harness-Placed Segments), but
+   an application with dynamic collections needs both, and neither should be
+   designed before a real application states its requirements. Grow the mail
+   example far enough to state them.
 3. Give `ui.*` and `net.*` value-based signatures so components can import
    them, then convert `gui-hello`. `term.*` already made the trip as
    `ai-direct:host/term`.
