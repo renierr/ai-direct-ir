@@ -113,6 +113,19 @@ pub struct Provider {
     pub path: String,
 }
 
+/// A directory granted to the application. WASI gives a component no ambient
+/// filesystem at all: it reaches exactly the directories listed here, under the
+/// names given here, with the permissions given here. Read-only unless the
+/// manifest says otherwise, because writing is the exception.
+#[derive(Deserialize)]
+pub struct Dir {
+    pub path: String,
+    /// The name the guest sees. Defaults to `path`.
+    pub guest: Option<String>,
+    #[serde(default)]
+    pub write: bool,
+}
+
 #[derive(Deserialize)]
 pub struct App {
     /// Optional WAT source assembled by `air build` into `path`.
@@ -143,6 +156,8 @@ pub struct Manifest {
     pub bridges: Vec<Bridge>,
     #[serde(default)]
     pub providers: Vec<Provider>,
+    #[serde(default)]
+    pub dirs: Vec<Dir>,
     pub app: App,
 }
 

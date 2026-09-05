@@ -20,13 +20,15 @@ fn guest_env(args: &[String]) -> wasmtime::Result<(cmds::GuestEnv, &[String])> {
     let mut rest = args;
     while let Some(first) = rest.first() {
         match first.as_str() {
-            "--dir" => {
+            // Writing is opt-in at the grant, so a tool cannot modify a
+            // directory that was only meant to be read.
+            "--dir" | "--dir-rw" => {
                 let Some(dir) = rest.get(1) else {
-                    return Err(wasmtime::Error::msg(
-                        "`--dir` needs a directory: air run --dir <path> <manifest> [args...]",
-                    ));
+                    return Err(wasmtime::Error::msg(format!(
+                        "`{first}` needs a directory: air run {first} <path> <manifest> [args...]"
+                    )));
                 };
-                env.dirs.push(dir.clone());
+                env.dirs.push((dir.clone(), first == "--dir-rw"));
                 rest = &rest[2..];
             }
             _ => break,

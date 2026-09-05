@@ -100,8 +100,13 @@ pub fn link_all(
     // `--dir <path>` grants one directory, named to the guest exactly as it was
     // written. A tool that reads whatever file it is pointed at needs this, and
     // making it explicit is the point: nothing is readable by default.
-    for dir in &env.dirs {
-        builder.preopened_dir(dir, dir, FsPerms::ReadOnly)?;
+    for (dir, write) in &env.dirs {
+        let perms = if *write {
+            FsPerms::ReadWrite
+        } else {
+            FsPerms::ReadOnly
+        };
+        builder.preopened_dir(dir, dir, perms)?;
     }
     if let Some(root) = &manifest.root {
         let guest = manifest.guest.clone().unwrap_or_else(|| {
@@ -111,6 +116,37 @@ pub fn link_all(
                 .unwrap_or_else(|| "root".into())
         });
         builder.preopened_dir(join(base, root), guest, FsPerms::ReadOnly)?;
+    }
+    // `[[dirs]]` is the general form: any number of directories, each named to
+    // the guest and each read-only unless it asks for writes. An application
+    // that keeps state -- a database, a cache, a log -- needs one of these.
+    for dir in &manifest.dirs {
+        let guest = dir.guest.clone().unwrap_or_else(|| dir.path.clone());
+        // A manifest path is project-relative, never relative to the shell that
+        // launched it: the directory belongs to the application and travels
+        // with it through `air dist`. `--dir` is the other anchor, for
+        // directories the user is pointing at from their own working directory.
+        let host = if Path::new(&dir.path).is_absolute() {
+            std::path::PathBuf::from(&dir.path)
+        } else {
+            base.join(&dir.path)
+        };
+        let perms = if dir.write {
+            // A writable directory is the application's own storage, so create
+            // it on first run rather than making every app ship an empty one.
+            std::fs::create_dir_all(&host)?;
+            FsPerms::ReadWrite
+        } else {
+            FsPerms::ReadOnly
+        };
+        builder
+            .preopened_dir(&host, guest, perms)
+            .map_err(|error| {
+                wasmtime::Error::msg(format!(
+                    "cannot grant `{}` to the app: {error}",
+                    host.display()
+                ))
+            })?;
     }
     let mut store = Store::new(
         engine,

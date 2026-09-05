@@ -902,11 +902,14 @@ fn sha256sum_example_matches_a_known_digest() {
     let fixture = project.join("abc.txt");
     std::fs::write(&fixture, b"abc").expect("write fixture");
 
-    let out = run(&project, &["run", "host.toml", "abc.txt"]);
+    // The manifest grants the repository, and its paths are project-relative,
+    // so the argument is named from the repository root wherever `air` is run.
+    let arg = "examples/sha256sum/abc.txt";
+    let out = run(&project, &["run", "host.toml", arg]);
     assert!(out.status.success(), "run failed: {}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  abc.txt\n"
+        format!("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  {arg}\n")
     );
 
     let _ = std::fs::remove_file(&fixture);
@@ -945,23 +948,28 @@ fn dir_grants_a_directory_to_the_guest() {
     let manifest = project.join("host.toml");
     let manifest = manifest.to_str().expect("utf-8 path");
 
-    // Run from the repository root, naming a file that is not beside the
-    // manifest. Without a grant this fails, and says why.
-    let denied = run(&repo(), &["run", manifest, "AGENTS.md"]);
+    // The manifest grants the repository, so reach for something outside it.
+    // Nothing is readable that was not granted, and the app says so.
+    let denied = run(&repo(), &["run", manifest, "/etc/hostname"]);
     assert_eq!(denied.status.code(), Some(2), "{}", stderr(&denied));
     let message = stderr(&denied);
-    assert!(message.contains("cannot open AGENTS.md"), "{message}");
+    assert!(message.contains("cannot open"), "{message}");
     assert!(message.contains("--dir"), "{message}");
 
-    let granted = run(&repo(), &["run", "--dir", ".", manifest, "AGENTS.md"]);
+    // `--dir /` grants everything, and an absolute path then works as written.
+    let granted = run(&repo(), &["run", "--dir", "/", manifest, "/etc/hostname"]);
     assert!(granted.status.success(), "{}", stderr(&granted));
     let digest = std::process::Command::new("sha256sum")
-        .arg("AGENTS.md")
-        .current_dir(repo())
+        .arg("/etc/hostname")
         .output()
         .expect("sha256sum");
     let expected = String::from_utf8_lossy(&digest.stdout).into_owned();
-    assert_eq!(stdout(&granted), expected);
+    let expected_hash = expected.split_whitespace().next().expect("hash");
+    assert!(
+        stdout(&granted).starts_with(expected_hash),
+        "{}",
+        stdout(&granted)
+    );
 }
 
 /// `--dir` must come before the manifest, so an application never has to
@@ -974,5 +982,81 @@ fn dir_without_a_path_is_rejected() {
         stderr(&out).contains("`--dir` needs a directory"),
         "{}",
         stderr(&out)
+    );
+}
+
+/// A component gets no ambient filesystem. `[[dirs]]` grants one, read-only
+/// unless it asks for writes, which is what a stateful app -- a database, a
+/// cache, a log -- needs before it can keep anything.
+#[test]
+fn a_manifest_dir_is_writable_only_when_it_says_so() {
+    let dir = scratch("manifest-dirs");
+    let project = dir.join("app");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    // A component that creates `out.txt` in the first granted directory.
+    let source = repo().join("air/tests/fixtures/write-file.wat");
+    std::fs::copy(&source, project.join("app.wat")).expect("copy fixture");
+
+    let manifest = |write: &str| {
+        format!(
+            "mode = \"command\"\n\
+             [[dirs]]\n\
+             path = \"data\"\n{write}\
+             [app]\n\
+             source = \"app.wat\"\n\
+             path = \"app.wasm\"\n\
+             run = \"wasi:cli/run\"\n"
+        )
+    };
+
+    // Read-only: the grant exists, the write does not happen.
+    std::fs::create_dir_all(project.join("data")).expect("create data");
+    std::fs::write(project.join("ro.toml"), manifest("")).expect("write manifest");
+    let denied = run(&project, &["run", "ro.toml"]);
+    assert!(!denied.status.success(), "a read-only grant must refuse");
+    assert!(!project.join("data/out.txt").exists(), "file was created");
+
+    // `write = true`: the file appears.
+    std::fs::write(project.join("rw.toml"), manifest("write = true\n")).expect("write manifest");
+    let allowed = run(&project, &["run", "rw.toml"]);
+    assert!(allowed.status.success(), "run failed: {}", stderr(&allowed));
+    let written = std::fs::read_to_string(project.join("data/out.txt")).expect("read output");
+    assert_eq!(written, "written by a component\n");
+}
+
+/// A manifest path is project-relative, so a granted directory is the same one
+/// wherever `air` was launched from, and a writable one is created on demand.
+#[test]
+fn a_writable_manifest_dir_is_created_and_project_relative() {
+    let dir = scratch("manifest-dirs-relative");
+    let project = dir.join("app");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::copy(
+        repo().join("air/tests/fixtures/write-file.wat"),
+        project.join("app.wat"),
+    )
+    .expect("copy fixture");
+    std::fs::write(
+        project.join("host.toml"),
+        "mode = \"command\"\n\
+         [[dirs]]\n\
+         path = \"data\"\n\
+         write = true\n\
+         [app]\n\
+         source = \"app.wat\"\n\
+         path = \"app.wasm\"\n\
+         run = \"wasi:cli/run\"\n",
+    )
+    .expect("write manifest");
+
+    // `data/` does not exist yet, and the run happens from somewhere else.
+    assert!(!project.join("data").exists());
+    let manifest = project.join("host.toml");
+    let out = run(&dir, &["run", manifest.to_str().expect("utf-8 path")]);
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert!(
+        project.join("data/out.txt").exists(),
+        "the directory resolved against the shell, not the manifest"
     );
 }

@@ -157,7 +157,8 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
 #[derive(Default)]
 pub struct GuestEnv {
     pub args: Vec<String>,
-    pub dirs: Vec<String>,
+    /// Each granted directory and whether the guest may write in it.
+    pub dirs: Vec<(String, bool)>,
 }
 
 impl GuestEnv {
