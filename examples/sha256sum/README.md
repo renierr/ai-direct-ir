@@ -3,10 +3,26 @@
 A real CLI, to prove the provider path end to end.
 
 ```bash
-air run examples/sha256sum/host.toml <file>   # digest a file
-air run examples/sha256sum/host.toml -        # digest stdin
+air run --dir . examples/sha256sum/host.toml <file>   # digest a file
+air run examples/sha256sum/host.toml -                # digest stdin
 air run examples/sha256sum/host.toml --help
 ```
+
+**A file has to be granted before it can be read.** WASI has no global
+filesystem root: a component reaches only the directories the host preopened
+for it, and an absolute path is not a path to anywhere on its own. Grant one
+of:
+
+| | |
+|---|---|
+| `air run --dir . <manifest> <file>` | the directory you ran from |
+| `air run --dir / <manifest> /abs/path` | everything; absolute paths work as written |
+| `root = "/"` in `host.toml` | the same, fixed in the manifest |
+
+Without a grant the app names the file it could not open and prints those
+options, rather than failing with nothing to act on. The default `root = "."`
+resolves relative to the *manifest*, so out of the box only files beside
+`host.toml` are readable -- which is the sandbox doing its job.
 
 Exit codes: `0` success, `1` usage, `2` I/O failure. Output matches coreutils
 `sha256sum` byte for byte, two spaces and all.
@@ -41,7 +57,9 @@ cd vendor/ai-direct-sha256-0.1.0 && sha256sum -c checksums.txt
 
 ## Limits
 
-Paths resolve inside the preopened `root`, so the app cannot read outside it —
-that is the capability model doing its job, not a bug. Input is buffered whole
+Paths resolve inside a granted directory, so the app cannot read outside one —
+that is the capability model doing its job, not a bug. An absolute argument has
+its leading `/` stripped and is then tried against each grant, which is what
+makes `--dir /` behave the way a shell user expects. Input is buffered whole
 at `0x10000..0x40000` (192 KiB); the provider has no streaming digest yet, so a
 larger file needs a `hash-stream` resource on the provider's contract.

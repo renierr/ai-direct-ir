@@ -112,7 +112,12 @@
       "built from the RustCrypto sha2 crate. Paths resolve inside the\n"
       "directory the manifest preopens.\n")
     (data $err-args "sha256sum: expected one file argument; try --help\n")
-    (data $err-open "sha256sum: cannot open file\n")
+    (data $err-open "sha256sum: cannot open ")
+    (data $err-hint
+      "\n"
+      "  Only granted directories are readable, and WASI has no global root.\n"
+      "  Grant one with:  air run --dir . <manifest> <file>\n"
+      "  or set `root` in the manifest (`root = \"/\"` grants everything).\n")
     (data $err-read "sha256sum: read failed\n")
     (data $err-big  "sha256sum: input is larger than the buffer\n")
     (data $err-root "sha256sum: no preopened directory; set `root` in host.toml\n")
@@ -180,26 +185,52 @@
           (br $more)))
       (local.get $total))
 
-    ;; Open a path under the first preopened directory and drain it.
+    ;; Open a path under a granted directory and drain it.
+    ;;
+    ;; WASI has no global filesystem root: `open-at` resolves only inside a
+    ;; preopened descriptor, and a leading `/` is not a path to anywhere. So an
+    ;; absolute argument is made relative and every granted directory is tried
+    ;; in turn -- with `--dir /` that makes an absolute path work as written.
     (func $read_file (param $p i32) (param $n i32) (result i32)
-      (local $dirs i32) (local $desc i32)
+      (local $dirs i32) (local $count i32) (local $i i32) (local $opened i32)
       (call $get_dirs (i32.const 0x600))
-      (if (i32.eqz (i32.load (i32.const 0x604)))
+      (local.set $dirs (i32.load (i32.const 0x600)))
+      (local.set $count (i32.load (i32.const 0x604)))
+      (if (i32.eqz (local.get $count))
         (then (call $die (global.get $err-root.ptr)
                          (global.get $err-root.len) (i32.const 2))))
-      (local.set $dirs (i32.load (i32.const 0x600)))
-      ;; element 0 is [descriptor, name-ptr, name-len]
-      (local.set $desc (i32.load (local.get $dirs)))
 
-      ;; open-at(self, path-flags=0, path, open-flags=0, flags=read)
-      (call $open_at (local.get $desc) (i32.const 0)
-        (local.get $p) (local.get $n)
-        (i32.const 0) (i32.const 1) (i32.const 0x700))
-      (if (i32.load8_u (i32.const 0x700))
-        (then (call $die (global.get $err-open.ptr)
-                         (global.get $err-open.len) (i32.const 2))))
+      (if (i32.eq (i32.load8_u (local.get $p)) (i32.const 47))
+        (then
+          (local.set $p (i32.add (local.get $p) (i32.const 1)))
+          (local.set $n (i32.sub (local.get $n) (i32.const 1)))))
 
-      (call $read_via_stream (i32.load (i32.const 0x704)) (i64.const 0)
+      (local.set $opened (i32.const -1))
+      (block $found
+        (loop $each
+          (br_if $found (i32.ge_u (local.get $i) (local.get $count)))
+          ;; element i is [descriptor, name-ptr, name-len]
+          ;; open-at(self, path-flags=0, path, open-flags=0, flags=read)
+          (call $open_at
+            (i32.load (i32.add (local.get $dirs)
+                               (i32.mul (local.get $i) (i32.const 12))))
+            (i32.const 0) (local.get $p) (local.get $n)
+            (i32.const 0) (i32.const 1) (i32.const 0x700))
+          (if (i32.eqz (i32.load8_u (i32.const 0x700)))
+            (then
+              (local.set $opened (i32.load (i32.const 0x704)))
+              (br $found)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $each)))
+
+      (if (i32.lt_s (local.get $opened) (i32.const 0))
+        (then
+          (call $eprint (global.get $err-open.ptr) (global.get $err-open.len))
+          (call $eprint (local.get $p) (local.get $n))
+          (call $die (global.get $err-hint.ptr)
+                     (global.get $err-hint.len) (i32.const 2))))
+
+      (call $read_via_stream (local.get $opened) (i64.const 0)
         (i32.const 0x800))
       (if (i32.load8_u (i32.const 0x800))
         (then (call $die (global.get $err-read.ptr)

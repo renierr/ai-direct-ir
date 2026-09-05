@@ -1,5 +1,9 @@
 # A real CLI: `air run examples/sha256sum/host.toml <file>`.
-# `root` is the directory the app may read; paths resolve inside it.
+# `root` is the directory the app may read, resolved relative to THIS file.
+# For a file elsewhere, grant it at the command line instead:
+#   air run --dir . <manifest> <file>      the directory you ran from
+#   air run --dir / <manifest> /abs/path   everything
+# or set `root = "/"` here.
 mode = "command"
 root = "."
 guest = "/work"
