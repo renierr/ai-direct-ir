@@ -334,6 +334,21 @@ struct Expanded {
     /// Where a `;; @wasi` directive already generated a boundary, if anywhere.
     /// A second one would redefine `$mem-mod` and every lowered function.
     boundary: Option<(std::path::PathBuf, usize)>,
+    /// The address range a `;; @data` directive set aside for segments the
+    /// author did not place.
+    region: Option<DataRegion>,
+}
+
+/// The span `;; @data <start>[..<end>]` gives the harness to place segments in.
+/// The author still owns the memory map; they hand over one range of it rather
+/// than one address per string.
+struct DataRegion {
+    start: u32,
+    /// Exclusive upper bound. Without one, packing past the region is only
+    /// caught when it collides with a placed segment or overruns the memory.
+    end: Option<u32>,
+    file: std::path::PathBuf,
+    line: usize,
 }
 
 impl Expanded {
@@ -368,6 +383,7 @@ fn expand_wat(root: &std::path::Path) -> Result<Expanded> {
         origins: Vec::new(),
         includes: Vec::new(),
         boundary: None,
+        region: None,
     };
     let project = root
         .parent()
@@ -375,6 +391,7 @@ fn expand_wat(root: &std::path::Path) -> Result<Expanded> {
         .to_path_buf();
     let mut open = Vec::new();
     expand_into(root, &project, &mut expanded, &mut open)?;
+    place_data_segments(&mut expanded)?;
     append_data_globals(&mut expanded)?;
     Ok(expanded)
 }
@@ -405,6 +422,11 @@ fn expand_into(
         if let Some(args) = directive_args(trimmed, ";; @wasi") {
             expand_wasi(args, file, index + 1, expanded)?;
             continue;
+        }
+        if let Some(args) = directive_args(trimmed, ";; @data") {
+            set_data_region(args, file, index + 1, expanded)?;
+            // The directive is a comment, so it stays in the expanded text and
+            // the origin map keeps its one-to-one shape.
         }
         expanded.text.push_str(line);
         expanded.text.push('\n');
@@ -764,6 +786,148 @@ fn identifier(text: &str, rest: &[u8], offset: usize) -> Option<String> {
     let start = offset + skipped;
     let len = token_len(&rest[skipped..]);
     Some(text[start..start + len].to_string())
+}
+
+/// A literal address: decimal, or hexadecimal with an `0x` prefix.
+fn address(text: &str, described: &str) -> Result<u32> {
+    let token = text.trim().replace('_', "");
+    let parsed = match token.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => token.parse(),
+    };
+    parsed.map_err(|_| wasmtime::Error::msg(format!("`{token}` at {described} is not an address")))
+}
+
+/// Record the `;; @data <start>[..<end>]` region. Declaring it is what keeps
+/// the harness from guessing at addresses the author is already using for
+/// scratch space, buffers or a lib's ABI map.
+fn set_data_region(
+    args: &str,
+    file: &std::path::Path,
+    line: usize,
+    expanded: &mut Expanded,
+) -> Result<()> {
+    if let Some(first) = &expanded.region {
+        return fail(format!(
+            "`{}:{line}` declares a second `@data` region; `{}:{} already declared one",
+            file.display(),
+            first.file.display(),
+            first.line
+        ));
+    }
+    let described = format!("{}:{line}", file.display());
+    let (start_text, end_text) = match args.trim().split_once("..") {
+        Some((start, end)) => (start, Some(end)),
+        None => (args.trim(), None),
+    };
+    let start = address(start_text, &described)?;
+    let end = end_text.map(|text| address(text, &described)).transpose()?;
+    if let Some(end) = end {
+        if end <= start {
+            return fail(format!(
+                "`@data` region at {described} ends at {end:#x}, \
+                 which is not above its start {start:#x}"
+            ));
+        }
+    }
+    expanded.region = Some(DataRegion {
+        start,
+        end,
+        file: file.to_path_buf(),
+        line,
+    });
+    Ok(())
+}
+
+/// True when a data form places itself. Only the text before the first string
+/// literal counts, so `i32.const` inside the data itself is not an offset.
+fn has_offset(form: &str) -> bool {
+    form.split('"')
+        .next()
+        .is_some_and(|head| head.contains("i32.const"))
+}
+
+/// Give every named segment that did not place itself an address inside the
+/// `@data` region, packed in source order.
+///
+/// This is the other hand-maintained number in a WAT source. `.len` already
+/// comes from the harness; without this the author still chains addresses by
+/// hand, so inserting a word into one string moves every string after it.
+/// Segments that state an offset keep it: the memory map stays author-owned,
+/// and the region is the part handed over.
+fn place_data_segments(expanded: &mut Expanded) -> Result<()> {
+    let scan = scan_module(&expanded.text);
+    // (byte to insert at, text to insert), applied last-first so earlier
+    // offsets stay valid.
+    let mut edits: Vec<(usize, String)> = Vec::new();
+    for module in &scan.modules {
+        let mut taken: Vec<(&str, u32, u32)> = Vec::new();
+        let mut unplaced = Vec::new();
+        for segment in &module.data {
+            let form = &expanded.text[segment.start..=segment.end];
+            let (file, line) = expanded.origin(segment.line);
+            let described = format!("{} at {}:{line}", segment.name, file.display());
+            let length = data_length(form, &described)?;
+            if has_offset(form) {
+                taken.push((&segment.name, data_address(form, &described)?, length));
+            } else {
+                unplaced.push((segment, length, described));
+            }
+        }
+        if unplaced.is_empty() {
+            continue;
+        }
+        let Some(region) = &expanded.region else {
+            let (_, _, described) = &unplaced[0];
+            return fail(format!(
+                "data segment `{described}` has no offset and no `;; @data <start>` \
+                 region is declared; add the directive or give the segment a literal offset"
+            ));
+        };
+        let mut next = region.start;
+        for (segment, length, described) in unplaced {
+            if let Some(end) = region.end {
+                if next + length > end {
+                    return fail(format!(
+                        "data segment `{described}` does not fit the `@data` region: \
+                         {next:#x}..{:#x} passes its end {end:#x}",
+                        next + length
+                    ));
+                }
+            }
+            for (other, address, other_length) in &taken {
+                if next < address + other_length && *address < next + length {
+                    return fail(format!(
+                        "the `@data` region would place `{described}` at \
+                         {next:#x}..{:#x}, over `{other}` at {address:#x}..{:#x}",
+                        next + length,
+                        address + other_length
+                    ));
+                }
+            }
+            edits.push((
+                identifier_end(&expanded.text, segment),
+                format!(" (i32.const {next:#x})"),
+            ));
+            next += length;
+        }
+    }
+    edits.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    for (at, text) in edits {
+        expanded.text.insert_str(at, &text);
+    }
+    Ok(())
+}
+
+/// The byte just past a segment's `$name`, where its offset belongs.
+fn identifier_end(text: &str, segment: &DataSegment) -> usize {
+    let bytes = text.as_bytes();
+    let start = segment.start
+        + bytes[segment.start..=segment.end]
+            .iter()
+            .position(|b| *b == b'$')
+            .expect("a named segment has an identifier");
+    start + token_len(&bytes[start..])
 }
 
 /// Named data segments are the one place authored WAT carries a hand-maintained
@@ -2023,7 +2187,7 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{data_address, data_length, scan_module, wat_location};
+    use super::{address, data_address, data_length, has_offset, scan_module, wat_location};
 
     #[test]
     fn scanned_functions_follow_core_index_order() {
@@ -2075,6 +2239,22 @@ mod tests {
             4096
         );
         assert!(data_address("(data $a (global.get $base) \"x\")", "a").is_err());
+    }
+
+    #[test]
+    fn an_offset_inside_the_data_itself_is_not_a_placement() {
+        assert!(has_offset("(data $a (i32.const 0x100) \"x\")"));
+        assert!(!has_offset("(data $a \"x\")"));
+        // The literal mentions the instruction; the segment still has no offset.
+        assert!(!has_offset("(data $a \"use (i32.const 0) here\")"));
+    }
+
+    #[test]
+    fn addresses_parse_as_decimal_or_hex() {
+        assert_eq!(address("0x1000", "seg").unwrap(), 0x1000);
+        assert_eq!(address("4096", "seg").unwrap(), 4096);
+        assert_eq!(address("0x1_000", "seg").unwrap(), 0x1000);
+        assert!(address("nope", "seg").is_err());
     }
 
     #[test]
