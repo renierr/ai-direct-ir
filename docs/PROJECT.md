@@ -174,9 +174,10 @@ does not say why. One directive replaces all of it:
 Capabilities are `stdin`, `stdout`, `stderr`, `exit` and `exit-with-code`.
 `exit` takes a `result`, so 0 and 1 are the only representable values and it
 says only whether the run failed; `exit-with-code` takes a `u8` for a
-POSIX-style status. `filesystem` imports the whole `wasi:filesystem/types`
-plus `wasi:filesystem/preopens`, derived from the vendored WASI WIT rather
-than transcribed (see below). `pages=` (default 1)
+POSIX-style status. `filesystem` generates the `wasi:filesystem/types` and
+`wasi:filesystem/preopens` imports from the vendored WASI WIT rather than
+transcribing them, narrowed to the functions the application imports from
+`"fs"` (see below). `pages=` (default 1)
 sizes the memory and `heap=` (default `0x8000`) places the canonical ABI bump
 allocator above the application's fixed addresses. An unknown word is an error,
 not a silent omission, and a second directive is rejected rather than left to
@@ -186,8 +187,9 @@ fail as a duplicate identifier in generated text.
 `wasi:io/streams` nor `wasi:io/error`, and `stdout` with `stderr` share one
 output stream and one lowered `write`. `filesystem` implies the stream
 *resources* (`read-via-stream` returns an `input-stream`) without the
-read/write *methods*. The generated names are the boundary's
-ABI, so the application can rely on them:
+read/write *methods*, and declares the three filesystem functions
+`sha256sum` imports rather than the WIT's twenty-nine. The generated names
+are the boundary's ABI, so the application can rely on them:
 
 | Name | What it is |
 | --- | --- |
@@ -210,10 +212,26 @@ The shorthand above stopped at hand-picked capabilities until `filesystem`
 proved the next step: `air` parses the vendored WASI 0.2.12 WIT
 (`air/wit/wasi-0.2.12/`, copied from `wasmtime-wasi 48`) with `wit-parser`
 and emits the `wasi:filesystem/types` and `wasi:filesystem/preopens`
-imports from it — every enum case, flag, record, variant, resource, and all
-thirty method signatures — plus the aliases, canonical lowerings, and the
-`$fs` instance. Only the instance names (`$fs-types`, `$fs`, ...) are
-harness ABI; every type and signature is the WIT's.
+imports from it — enum cases, flags, records, variants, resources and method
+signatures — plus the aliases, canonical lowerings, and the `$fs` instance.
+Only the instance names (`$fs-types`, `$fs`, ...) are harness ABI; every type
+and signature is the WIT's.
+
+The application says how much of it to generate. `wasi:filesystem` declares 29
+functions and a program calls a few, so the `(import "fs" "...")` lines are
+read as the request: the boundary declares those functions, the types their
+signatures reach, and nothing else. `sha256sum` names three of the 29, and its
+artifact went from 11596 bytes to 5959 — 108 bytes more than the 51 lines of
+hand-transcription it replaced, for a boundary nobody maintains. A `"fs"` name
+the WIT does not have is a build error that names the typo, and `filesystem`
+with no `"fs"` import at all is an error too, rather than an empty instance to
+puzzle over.
+
+That is why expansion is two passes (`air/src/asm/source.rs`): the `;; @wasi`
+line holds its place while includes expand, and the boundary is spliced in once
+every module has said what it imports — from any fragment, at any include
+depth. Generated lines still report the directive as their origin, so a
+validator complaint about the boundary points at the line the author wrote.
 
 Converting `examples/sha256sum/sha256sum.wat` deleted 51 hand-transcribed
 lines for one directive word, `filesystem`, with no change to the
@@ -277,6 +295,9 @@ rebuilt from the tracked `.wat` instead of drifting from it. `hello`, `pi`, and
 generated from the vendored WIT, the digest still matches `sha256sum` byte
 for byte, and unit tests pin the 37-case `error-code` enum plus the `$fs`
 lowerings while `air/tests/cli.rs` pins the end-to-end import, link, and run.
+Narrowing that boundary to the application's own `"fs"` imports halved the
+artifact (11596 to 5959 bytes) with the digest, the error paths, and the
+line-accurate diagnostics all re-verified afterwards.
 
 Fresh native, browser, and GUI scaffolds have completed their applicable
 `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
@@ -427,11 +448,10 @@ harness's:
 **Interfaces WASI already defines: no harness change.** `air` links the whole
 WASI 0.2 set through `p2::add_to_linker_sync` -- cli, io, filesystem, sockets,
 clocks, random. An application reaches any of them by declaring the import in
-its own WAT. `examples/sha256sum/` reads files through hand-written
-`wasi:filesystem` imports, including the 37-case `error-code` enum, and not one
-line of `air` knows the word "filesystem". The `;; @wasi` directive is a
-shorthand for the boundary most programs need, never a gate on the ones they do
-not.
+its own WAT; `examples/sha256sum/` did exactly that with 51 hand-written
+`wasi:filesystem` lines, including the 37-case `error-code` enum, before the
+directive learned to generate them. The `;; @wasi` directive is a shorthand
+for the boundary most programs need, never a gate on the ones they do not.
 
 **Host policy: genuinely the harness's job.** Whether argv reaches the guest,
 which directories are preopened, whether a clock is real or frozen -- WASI
@@ -458,12 +478,13 @@ without explaining itself reads as a broken program.
 `[[bridges]]`. These extend the harness once so every application benefits,
 which is the stated point of the repository.
 
-So the shorthand is the only thing that grows per interface, and the fix for
-that is already visible: generate the boundary from the interface's own WIT --
-which ships with Wasmtime and is what `examples/sha256sum/`'s enum was
-transcribed from -- instead of hardcoding capability words. That would end the
-category entirely. Until an application needs it, hand-writing a rare import is
-a declaration an author makes once.
+So the shorthand is the only thing that grows per interface, and the fix is
+underway: `filesystem` is generated from the interface's own WIT -- which ships
+with Wasmtime and is what `examples/sha256sum/`'s enum was transcribed from --
+and narrowed by the application's own imports, instead of being hardcoded
+capability by capability. Doing the same for `sockets` and `clocks` ends the
+category. Until then, hand-writing a rare import is a declaration an author
+makes once.
 
 ### Granting Directories, And Where An App Keeps State
 
@@ -629,8 +650,11 @@ being specification-only before more specification is written.
 1. Extend the WIT-driven boundary to the remaining interfaces and provider
     contracts. `filesystem` is generated from the vendored WASI WIT; sockets,
     clocks, and the catalog's provider WIT still go through hand-written
-    declarations. This is the step that stops the shorthand from growing per
-    interface. See What Actually Needs A Harness Change.
+    declarations. Granularity is settled — the application's own imports name
+    what to generate — so a new interface reuses that rule rather than dragging
+    its whole surface in. This is the step that stops the shorthand from growing
+    per interface. See The Boundary From WIT and What Actually Needs A Harness
+    Change.
 2. Continue up the memory ladder: records with named fields, then an
    allocator. Segment addresses are handled (see Harness-Placed Segments), but
    an application with dynamic collections needs both, and neither should be

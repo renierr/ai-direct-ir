@@ -28,6 +28,10 @@ pub(super) struct ModuleScan {
 pub(super) struct Scan {
     /// Modules in source order, which is also Core module index order.
     pub(super) modules: Vec<ModuleScan>,
+    /// Every two-name `(import "<module>" "<name>" ...)` in source order. The
+    /// generated boundary reads the `"fs"` ones to learn which filesystem
+    /// functions the application actually asked for.
+    pub(super) imports: Vec<(String, String)>,
 }
 
 /// A form the scanner has entered but not yet left.
@@ -60,6 +64,7 @@ pub(super) fn scan_module(text: &str) -> Scan {
     let mut open: Vec<Frame<'_>> = Vec::new();
     let mut scan = Scan {
         modules: Vec::new(),
+        imports: Vec::new(),
     };
     let mut line = 1usize;
     let mut block = 0usize;
@@ -125,6 +130,11 @@ pub(super) fn scan_module(text: &str) -> Scan {
                         line += bytes[i..after].iter().filter(|b| **b == b'\n').count();
                         i = after + len;
                     }
+                }
+                if head == "import"
+                    && let Some(pair) = import_names(text, &bytes[i..], i)
+                {
+                    scan.imports.push(pair);
                 }
                 let depth = open.len();
                 if head == "func" {
@@ -192,6 +202,36 @@ fn leading_space(bytes: &[u8]) -> usize {
         .unwrap_or(bytes.len())
 }
 
+/// The two names of an `(import "<module>" "<name>" ...)`. A component-level
+/// import states one name and no second literal follows, so this returns
+/// `None` and the form is ignored.
+fn import_names(text: &str, rest: &[u8], offset: usize) -> Option<(String, String)> {
+    let (module, next) = string_literal(text, rest, offset)?;
+    let (name, _) = string_literal(text, &rest[next..], offset + next)?;
+    Some((module, name))
+}
+
+/// The next string literal in `rest`, and the offset just past its closing
+/// quote. `None` when the next token is not a string. The contents are
+/// returned raw: an import name that needs an escape is not a name the
+/// generated boundary can export anyway.
+fn string_literal(text: &str, rest: &[u8], offset: usize) -> Option<(String, usize)> {
+    let mut i = rest.iter().position(|b| !b.is_ascii_whitespace())?;
+    if rest[i] != b'"' {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    while i < rest.len() {
+        match rest[i] {
+            b'\\' => i += 2,
+            b'"' => return Some((text[offset + start..offset + i].to_string(), i + 1)),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// The `$name` immediately following a form's head keyword, if there is one.
 fn identifier(text: &str, rest: &[u8], offset: usize) -> Option<String> {
     let skipped = rest.iter().position(|b| !b.is_ascii_whitespace())?;
@@ -227,6 +267,32 @@ mod tests {
     fn scanned_functions_ignore_block_comments() {
         let text = "(module (; (func hidden) ;) (func $only))\n";
         assert_eq!(scan_module(text).modules[0].functions, vec![1]);
+    }
+
+    /// The generated boundary is a function of these: a name in a comment or a
+    /// string never asked for a filesystem function.
+    #[test]
+    fn scanned_imports_carry_both_names_and_skip_comments() {
+        let text = "\
+(component
+  ;; (import \"fs\" \"never-asked-for\" (func $no))
+  (import \"wasi:cli/exit@0.2.12\" (instance $exit))
+  (core module $main
+    (import \"fs\" \"open-at\" (func $open (param i32)))
+    (import \"wasi\" \"write\" (func $write (param i32)))
+    (data (i32.const 0) \"(import \\\"fs\\\" \\\"in-a-string\\\")\")
+  )
+)
+";
+        let imports = scan_module(text).imports;
+        assert_eq!(
+            imports,
+            vec![
+                ("fs".to_string(), "open-at".to_string()),
+                ("wasi".to_string(), "write".to_string()),
+            ],
+            "a one-name component import contributes nothing"
+        );
     }
 
     #[test]

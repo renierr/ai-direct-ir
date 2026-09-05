@@ -1,11 +1,14 @@
 //! Expanding a root WAT source into one assemblable text: `;; @include`
 //! fragments, the `;; @wasi` boundary, and the `;; @data` region.
 
+use std::collections::BTreeSet;
+
 use wasmtime::Result;
 
 use crate::fail;
 
 use super::data::{append_data_globals, place_data_segments, set_data_region};
+use super::scan::scan_module;
 
 /// One expanded WAT source plus the origin of every emitted line, so parser and
 /// validator errors can name the file the author actually wrote.
@@ -15,12 +18,27 @@ pub(super) struct Expanded {
     pub(super) origins: Vec<(std::path::PathBuf, usize)>,
     /// Every transitively included fragment, for rebuild staleness checks.
     pub(super) includes: Vec<std::path::PathBuf>,
-    /// Where a `;; @wasi` directive already generated a boundary, if anywhere.
-    /// A second one would redefine `$mem-mod` and every lowered function.
-    pub(super) boundary: Option<(std::path::PathBuf, usize)>,
+    /// The `;; @wasi` directive, if the source has one. A second one would
+    /// redefine `$mem-mod` and every lowered function.
+    boundary: Option<Directive>,
     /// The address range a `;; @data` directive set aside for segments the
     /// author did not place.
     pub(super) region: Option<DataRegion>,
+}
+
+/// A `;; @wasi` directive: what it asked for, and where to put the boundary it
+/// generates. The boundary is spliced in only after the whole source is
+/// expanded, because what it declares depends on what the modules below it
+/// import.
+struct Directive {
+    /// Parsed at the directive's own line, so a misspelled capability is
+    /// reported there rather than wherever the generated text lands.
+    boundary: crate::boundary::Boundary,
+    file: std::path::PathBuf,
+    line: usize,
+    /// Index in `origins` where the generated lines go — just past the
+    /// directive's own comment line.
+    at: usize,
 }
 
 /// The span `;; @data <start>[..<end>]` gives the harness to place segments in.
@@ -75,6 +93,7 @@ pub(super) fn expand_wat(root: &std::path::Path) -> Result<Expanded> {
         .to_path_buf();
     let mut open = Vec::new();
     expand_into(root, &project, &mut expanded, &mut open)?;
+    expand_boundary(&mut expanded)?;
     place_data_segments(&mut expanded)?;
     append_data_globals(&mut expanded)?;
     Ok(expanded)
@@ -104,7 +123,7 @@ fn expand_into(
             continue;
         }
         if let Some(args) = directive_args(trimmed, ";; @wasi") {
-            expand_wasi(args, file, index + 1, expanded)?;
+            record_wasi(args, line, file, index + 1, expanded)?;
             continue;
         }
         if let Some(args) = directive_args(trimmed, ";; @data") {
@@ -131,34 +150,115 @@ fn directive_args<'a>(line: &'a str, directive: &str) -> Option<&'a str> {
     rest.starts_with(char::is_whitespace).then(|| rest.trim())
 }
 
-/// Replace a `;; @wasi ...` line with the WASI 0.2 component boundary it names.
-/// Every generated line reports the directive as its origin, so a validator
-/// complaint about the boundary points at the line the author actually wrote.
-fn expand_wasi(
+/// Note a `;; @wasi ...` line and hold its place. The directive itself stays in
+/// the expanded text as an ordinary comment, so the origin map keeps its
+/// one-to-one shape; the boundary lands right after it in `expand_boundary`.
+fn record_wasi(
     args: &str,
+    source_line: &str,
     file: &std::path::Path,
     line: usize,
     expanded: &mut Expanded,
 ) -> Result<()> {
-    if let Some((first, first_line)) = &expanded.boundary {
+    if let Some(first) = &expanded.boundary {
         return fail(format!(
             "`{}:{line}` generates a second WASI boundary; \
-             `{}:{first_line}` already generated one",
+             `{}:{}` already generated one",
             file.display(),
-            first.display()
+            first.file.display(),
+            first.line
         ));
     }
-    let boundary = crate::boundary::parse(args)
-        .map_err(|error| wasmtime::Error::msg(format!("{}:{line}: {error}", file.display())))?;
-    let text = crate::boundary::emit(&boundary)
-        .map_err(|error| wasmtime::Error::msg(format!("{}:{line}: {error}", file.display())))?;
-    for generated in text.lines() {
-        expanded.text.push_str(generated);
-        expanded.text.push('\n');
-        expanded.origins.push((file.to_path_buf(), line));
-    }
-    expanded.boundary = Some((file.to_path_buf(), line));
+    let boundary =
+        crate::boundary::parse(args).map_err(|error| directive_error(file, line, &error))?;
+    expanded.text.push_str(source_line);
+    expanded.text.push('\n');
+    expanded.origins.push((file.to_path_buf(), line));
+    expanded.boundary = Some(Directive {
+        boundary,
+        file: file.to_path_buf(),
+        line,
+        at: expanded.origins.len(),
+    });
     Ok(())
+}
+
+/// Generate the WASI 0.2 boundary and splice it in where the directive was.
+///
+/// This runs after the whole source is expanded because the boundary is not a
+/// function of the directive alone: `wasi:filesystem` declares 29 functions and
+/// an application names the few it calls, as `(import "fs" ...)` lines that may
+/// live in any included fragment. Every generated line reports the directive as
+/// its origin, so a validator complaint about the boundary points at the line
+/// the author actually wrote.
+fn expand_boundary(expanded: &mut Expanded) -> Result<()> {
+    let Some(directive) = &expanded.boundary else {
+        return Ok(());
+    };
+    let (file, line, at) = (directive.file.clone(), directive.line, directive.at);
+    let text = crate::boundary::emit(&directive.boundary, &fs_imports(&expanded.text))
+        .map_err(|error| directive_error(&file, line, &error))?;
+    splice(expanded, at, &text, (file, line));
+    Ok(())
+}
+
+/// The short names the expanded source imports from `"fs"`, which is what
+/// `;; @wasi filesystem` generates a boundary for.
+fn fs_imports(text: &str) -> BTreeSet<String> {
+    scan_module(text)
+        .imports
+        .into_iter()
+        .filter(|(module, _)| module == "fs")
+        .map(|(_, name)| name)
+        .collect()
+}
+
+/// Insert `generated` before expanded line index `at`, crediting every inserted
+/// line to `origin`.
+fn splice(
+    expanded: &mut Expanded,
+    at: usize,
+    generated: &str,
+    origin: (std::path::PathBuf, usize),
+) {
+    let mut text = String::with_capacity(expanded.text.len() + generated.len());
+    let mut origins = Vec::with_capacity(expanded.origins.len() + generated.lines().count());
+    let mut inserted = false;
+    for (index, (line, source)) in expanded.text.lines().zip(&expanded.origins).enumerate() {
+        if index == at {
+            push_lines(&mut text, &mut origins, generated, &origin);
+            inserted = true;
+        }
+        text.push_str(line);
+        text.push('\n');
+        origins.push(source.clone());
+    }
+    if !inserted {
+        push_lines(&mut text, &mut origins, generated, &origin);
+    }
+    expanded.text = text;
+    expanded.origins = origins;
+}
+
+fn push_lines(
+    text: &mut String,
+    origins: &mut Vec<(std::path::PathBuf, usize)>,
+    generated: &str,
+    origin: &(std::path::PathBuf, usize),
+) {
+    for line in generated.lines() {
+        text.push_str(line);
+        text.push('\n');
+        origins.push(origin.clone());
+    }
+}
+
+fn directive_error(
+    file: &std::path::Path,
+    line: usize,
+    error: &wasmtime::Error,
+) -> wasmtime::Error {
+    wasmtime::Error::msg(format!("{}:{line}: {error}", file.display()))
 }
 
 fn include_path(project: &std::path::Path, path: &str) -> Result<std::path::PathBuf> {

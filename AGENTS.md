@@ -104,6 +104,10 @@ Start with `air inspect <file>`.
 - Nothing is writable unless it asks. A stateful app declares
   `[[dirs]] path = "data"` with `write = true`, which `air` creates on first
   run; that is where a database or cache belongs.
+- `;; @wasi filesystem` reads the application's `(import "fs" "...")` lines and
+  generates exactly those functions from the vendored WASI WIT. Import what the
+  program calls; a name the WIT does not have, or `filesystem` with no `"fs"`
+  import at all, fails the build.
 - A WASI interface `;; @wasi` does not name is still available: declare the
   import by hand. `air` links the whole WASI 0.2 set, so the directive is a
   shorthand for the common boundary, never a gate. See `examples/sha256sum/`.

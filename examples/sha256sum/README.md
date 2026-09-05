@@ -38,10 +38,12 @@ Exit codes: `0` success, `1` usage, `2` I/O failure. Output matches coreutils
   crate, built into a component in `ai-direct-ir-providers` and **vendored**
   into `vendor/` with its hash and license notices. No code here computes a
   digest.
-- **A WASI interface the harness has never heard of.** The `wasi:filesystem`
-  imports in `sha256sum.wat` are hand-written. `air` contains no filesystem
-  code; it links the whole WASI 0.2 set, so a new interface is a declaration in
-  the application, not a change to the harness.
+- **A WASI interface the harness has never heard of.** `air` contains no
+  filesystem code: `;; @wasi ... filesystem` generates the `wasi:filesystem`
+  boundary from the vendored WASI WIT, and the three `(import "fs" ...)` lines
+  in `sha256sum.wat` decide its extent. `air` links the whole WASI 0.2 set, so
+  an interface the directive does not know is still a declaration in the
+  application, not a change to the harness.
 - **Guest arguments.** `air run <manifest> <args...>` forwards everything after
   the manifest, which is a host policy decision and therefore genuinely the
   harness's job.

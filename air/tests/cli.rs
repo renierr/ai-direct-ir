@@ -656,13 +656,45 @@ fn the_wasi_directive_imports_only_the_requested_capabilities() {
     assert_eq!(stdout(&ran), "hello from app\n");
 }
 
+/// Give the scaffolded component one filesystem call, so `;; @wasi filesystem`
+/// has an `(import "fs" ...)` line to generate a boundary for.
+fn use_filesystem(project: &Path) {
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    let rewritten = source
+        .replace(
+            "    (import \"wasi\" \"write\" (func $write (param i32 i32 i32 i32)))",
+            "    (import \"wasi\" \"write\" (func $write (param i32 i32 i32 i32)))\n\
+             \x20   (import \"fs\" \"get-directories\" (func $get-dirs (param i32)))",
+        )
+        .replace(
+            "      (i32.load (i32.const 0x200)))",
+            "      (call $get-dirs (i32.const 0x300))\n\
+             \x20     (i32.load (i32.const 0x200)))",
+        )
+        .replace(
+            "    (with \"wasi\" (instance $wasi))))",
+            "    (with \"wasi\" (instance $wasi))\n\
+             \x20   (with \"fs\" (instance $fs))))",
+        );
+    assert!(rewritten.contains("$get-dirs"), "fs import not injected");
+    assert!(rewritten.contains("(with \"fs\""), "fs instance not wired");
+    std::fs::write(&root, rewritten).expect("write root wat");
+}
+
 /// `filesystem` derives the whole `wasi:filesystem` boundary from the
 /// vendored WIT: the artifact imports both interfaces with nothing
 /// hand-transcribed, and the component still links and runs.
+///
+/// It derives the *extent* of that boundary too, from the application's own
+/// `(import "fs" ...)` lines. Import and export names survive into the
+/// artifact as literal strings, so the bytes are the evidence that a program
+/// naming one function does not carry the WIT's other 28.
 #[test]
 fn the_wasi_directive_derives_filesystem_from_wit() {
     let project = scaffold_target("wasi-filesystem", "component");
     set_wasi_directive(&project, "stdout filesystem");
+    use_filesystem(&project);
 
     let built = run(&project, &["build"]);
     assert!(built.status.success(), "build failed: {}", stderr(&built));
@@ -676,10 +708,95 @@ fn the_wasi_directive_derives_filesystem_from_wit() {
         names.contains("wasi:filesystem/preopens@"),
         "preopens comes with filesystem"
     );
+    assert!(names.contains("get-directories"), "the program calls it");
+    for unasked in [
+        "open-at",
+        "read-via-stream",
+        "write-via-stream",
+        "metadata-hash",
+        "cross-device",
+    ] {
+        assert!(
+            !names.contains(unasked),
+            "`{unasked}` was never imported from `fs`"
+        );
+    }
 
     let ran = run(&project, &["run"]);
     assert!(ran.status.success(), "run failed: {}", stderr(&ran));
     assert_eq!(stdout(&ran), "hello from app\n");
+}
+
+/// The `(import "fs" ...)` line may be anywhere in the expanded source, which
+/// is why the boundary is generated after expansion rather than in place: here
+/// the whole application module moves into an included fragment, below the
+/// directive that has to account for it.
+#[test]
+fn an_fs_import_inside_an_include_still_drives_the_boundary() {
+    let project = scaffold_target("wasi-filesystem-include", "component");
+    set_wasi_directive(&project, "stdout filesystem");
+    use_filesystem(&project);
+
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    let marker = "  ;; --- application logic";
+    let (head, rest) = source.split_once(marker).expect("starter layout");
+    let (module, tail) = rest
+        .split_once("\n  (core instance $app")
+        .expect("starter layout");
+    std::fs::create_dir_all(project.join("src")).expect("create src");
+    std::fs::write(project.join("src/main.wat"), format!("{marker}{module}\n"))
+        .expect("write fragment");
+    std::fs::write(
+        &root,
+        format!("{head}  ;; @include src/main.wat\n  (core instance $app{tail}"),
+    )
+    .expect("write root wat");
+
+    let built = run(&project, &["build"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+    let bytes = std::fs::read(project.join("app.wasm")).expect("read artifact");
+    let names = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(names.contains("get-directories"), "the fragment calls it");
+    assert!(!names.contains("open-at"), "nothing imported it");
+
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
+    assert_eq!(stdout(&ran), "hello from app\n");
+}
+
+/// The boundary is the answer to a question the modules ask. Asking for
+/// `filesystem` and then importing nothing from `"fs"` is a mistake worth
+/// naming, not an empty instance to puzzle over later.
+#[test]
+fn filesystem_without_an_fs_import_is_rejected() {
+    let project = scaffold_target("wasi-filesystem-unused", "component");
+    set_wasi_directive(&project, "stdout filesystem");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "an unused boundary must not build");
+    let message = stderr(&built);
+    assert!(message.contains("app.wat"), "{message}");
+    assert!(message.contains("no module imports"), "{message}");
+}
+
+/// A misspelled `fs` import is a typo in the application, and the WIT knows
+/// it: say so at build time rather than failing to link.
+#[test]
+fn an_unknown_fs_import_is_rejected() {
+    let project = scaffold_target("wasi-filesystem-typo", "component");
+    set_wasi_directive(&project, "stdout filesystem");
+    use_filesystem(&project);
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    std::fs::write(&root, source.replace("get-directories", "get-directoriez"))
+        .expect("write root wat");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "a typo must not build");
+    let message = stderr(&built);
+    assert!(message.contains("get-directoriez"), "{message}");
+    assert!(message.contains("wasi:filesystem"), "{message}");
 }
 
 /// A misspelled capability stops the build and names the line that asked for

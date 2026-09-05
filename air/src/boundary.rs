@@ -21,7 +21,8 @@
 //!   app `(with "fs" (instance $fs))` and import short names such as
 //!   `"open-at"` and `"get-directories"`. Every type and signature in `$fs`
 //!   is generated from the vendored WASI WIT (see `wit.rs`); only these
-//!   instance names are harness ABI.
+//!   instance names are harness ABI. The `(import "fs" ...)` lines are the
+//!   request: `filesystem` declares those functions and no others.
 //!
 //! `$wasi` exports one Core function per requested capability: `get-stdin`,
 //! `read`, `get-stdout`, `get-stderr`, `write`, `exit`, `exit-with-code`.
@@ -29,6 +30,8 @@
 //! `exit` takes a `result` discriminant — 0 or 1, nothing else — so it says
 //! only whether the run failed. A program that wants a POSIX-style status asks
 //! for `exit-with-code`, which takes a `u8`.
+
+use std::collections::BTreeSet;
 
 use wasmtime::Result;
 
@@ -133,7 +136,12 @@ fn number(value: &str, setting: &str) -> Result<u32> {
 /// Emit the boundary. The result is ordinary WAT that an author could have
 /// written; nothing here is privileged. The filesystem imports are derived
 /// from the vendored WASI WIT on every emit, so this can fail.
-pub fn emit(boundary: &Boundary) -> Result<String> {
+///
+/// `fs_imports` are the short names the expanded source imports from `"fs"`.
+/// `wasi:filesystem` has 29 functions and an application uses a handful, so
+/// the boundary declares the handful — the same rule the capability list
+/// follows for `wasi:cli`.
+pub fn emit(boundary: &Boundary, fs_imports: &BTreeSet<String>) -> Result<String> {
     let mut out = String::new();
     out.push_str(
         "  ;; --- WASI 0.2 boundary, generated from `;; @wasi` --------------------\n\
@@ -145,7 +153,14 @@ pub fn emit(boundary: &Boundary) -> Result<String> {
     }
     emit_cli(boundary, &mut out);
     let filesystem = if boundary.filesystem {
-        let generated = crate::wit::filesystem()?;
+        if fs_imports.is_empty() {
+            return Err(wasmtime::Error::msg(
+                "`@wasi filesystem` generates the `$fs` instance, but no module \
+                 imports from `\"fs\"`; import the functions the application \
+                 calls, or drop `filesystem`",
+            ));
+        }
+        let generated = crate::wit::filesystem(fs_imports)?;
         out.push_str(&generated.wat);
         Some(generated.lowers)
     } else {
@@ -373,6 +388,17 @@ fn emit_lowering(
 mod tests {
     use super::*;
 
+    /// The boundary of `args`, for a program that imports nothing from `"fs"`.
+    fn wat(args: &str) -> String {
+        emit(&parse(args).unwrap(), &BTreeSet::new()).unwrap()
+    }
+
+    /// The boundary of `args` for a program importing `fs` from `"fs"`.
+    fn wat_fs(args: &str, fs: &[&str]) -> String {
+        let imports = fs.iter().map(|name| name.to_string()).collect();
+        emit(&parse(args).unwrap(), &imports).unwrap()
+    }
+
     #[test]
     fn defaults_are_one_page_and_a_high_heap() {
         let boundary = parse("stdout").unwrap();
@@ -402,24 +428,24 @@ mod tests {
     /// program that wants a status code asks for `exit-with-code` instead.
     #[test]
     fn exit_and_exit_with_code_are_separate_capabilities() {
-        let only_exit = emit(&parse("exit").unwrap()).unwrap();
+        let only_exit = wat("exit");
         assert!(only_exit.contains("(export \"exit\" (func (param \"status\" (result))))"));
         assert!(!only_exit.contains("exit-with-code"), "{only_exit}");
 
-        let both = emit(&parse("exit exit-with-code").unwrap()).unwrap();
+        let both = wat("exit exit-with-code");
         assert!(both.contains("(export \"exit-with-code\" (func (param \"status-code\" u8)))"));
         // One interface instance carries both functions.
         assert_eq!(both.matches("wasi:cli/exit@").count(), 1);
         assert!(both.contains("$exit-l") && both.contains("$exit-with-code-l"));
 
-        let only_code = emit(&parse("exit-with-code").unwrap()).unwrap();
+        let only_code = wat("exit-with-code");
         assert!(only_code.contains("exit-with-code"));
         assert!(!only_code.contains("(export \"exit\" (func"), "{only_code}");
     }
 
     #[test]
     fn exit_alone_needs_no_stream_interfaces() {
-        let text = emit(&parse("exit").unwrap()).unwrap();
+        let text = wat("exit");
         assert!(!text.contains("wasi:io/streams"), "{text}");
         assert!(!text.contains("wasi:io/error"), "{text}");
         assert!(text.contains("wasi:cli/exit"));
@@ -427,7 +453,7 @@ mod tests {
 
     #[test]
     fn stdout_and_stderr_share_one_output_stream() {
-        let text = emit(&parse("stdout stderr").unwrap()).unwrap();
+        let text = wat("stdout stderr");
         assert_eq!(
             text.matches("(export \"output-stream\" (type $os").count(),
             1
@@ -440,7 +466,7 @@ mod tests {
     /// the exported id, never the local type it was defined from.
     #[test]
     fn signatures_reference_the_exported_stream_error_id() {
-        let text = emit(&parse("stdin stdout").unwrap()).unwrap();
+        let text = wat("stdin stdout");
         assert!(text.contains("(error $sexp)"), "{text}");
         assert!(!text.contains("(error $se)"), "{text}");
     }
@@ -450,7 +476,7 @@ mod tests {
     /// arrive without transcription, and `$fs` carries the lowered functions.
     #[test]
     fn filesystem_comes_from_wit_not_transcription() {
-        let text = emit(&parse("stdout filesystem").unwrap()).unwrap();
+        let text = wat_fs("stdout filesystem", &["open-at", "get-directories"]);
         assert!(text.contains("wasi:filesystem/types@0.2.12"), "{text}");
         assert!(text.contains("wasi:filesystem/preopens@0.2.12"), "{text}");
         // The enum the hand-written boundary transcribed case by case.
@@ -469,9 +495,71 @@ mod tests {
     fn filesystem_without_stdio_still_imports_stream_types() {
         // `read-via-stream` returns an `input-stream`: the resource types must
         // exist even when no stdio capability asked for the methods.
-        let text = emit(&parse("filesystem").unwrap()).unwrap();
+        let text = wat_fs("filesystem", &["read-via-stream"]);
         assert!(text.contains("wasi:io/streams@"), "{text}");
         assert!(text.contains("wasi:filesystem/types@"), "{text}");
         assert!(!text.contains("wasi:cli/stdout@"), "{text}");
+    }
+
+    /// The point of deriving the boundary: an application that names three
+    /// functions carries three, not the WIT's whole catalogue.
+    #[test]
+    fn filesystem_declares_only_the_imported_functions() {
+        let text = wat_fs(
+            "stdin stdout filesystem",
+            &["get-directories", "open-at", "read-via-stream"],
+        );
+        for wanted in ["open-at", "read-via-stream", "get-directories"] {
+            assert!(
+                text.contains(&format!("(export \"{wanted}\" (func $")),
+                "{text}"
+            );
+        }
+        // Unasked-for methods and the types only they reach stay out.
+        for unwanted in [
+            "write-via-stream",
+            "set-times",
+            "metadata-hash",
+            "sync-data",
+        ] {
+            assert!(!text.contains(unwanted), "{unwanted} leaked into:\n{text}");
+        }
+        assert!(!text.contains("descriptor-stat"), "{text}");
+        // `descriptor-stat` is the only thing that reaches `datetime`, so the
+        // wall-clock import goes with it.
+        assert!(!text.contains("wasi:clocks/wall-clock"), "{text}");
+    }
+
+    /// Naming a function the WIT does not have is a typo, not a link failure
+    /// three steps later.
+    #[test]
+    fn an_unknown_fs_import_is_an_error() {
+        let imports = ["open-att".to_string()].into_iter().collect();
+        let message = emit(&parse("filesystem").unwrap(), &imports)
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("open-att"), "{message}");
+
+        // So is asking for the boundary and then importing nothing from it.
+        let message = emit(&parse("filesystem").unwrap(), &BTreeSet::new())
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("no module"), "{message}");
+    }
+
+    /// `preopens` re-exports `descriptor`, so the types instance must export it
+    /// even when the application calls no descriptor method.
+    #[test]
+    fn preopens_alone_still_exports_the_descriptor_resource() {
+        let text = wat_fs("filesystem", &["get-directories"]);
+        assert!(
+            text.contains("(export \"descriptor\" (type $fs-descriptor-t1 (sub resource)))"),
+            "{text}"
+        );
+        assert!(
+            text.contains("(alias export $fs-types \"descriptor\" (type $fs-pre-desc))"),
+            "{text}"
+        );
+        assert!(!text.contains("(export \"open-at\""), "{text}");
     }
 }
