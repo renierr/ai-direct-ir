@@ -334,6 +334,9 @@ struct Expanded {
     origins: Vec<(std::path::PathBuf, usize)>,
     /// Every transitively included fragment, for rebuild staleness checks.
     includes: Vec<std::path::PathBuf>,
+    /// Where a `;; @wasi` directive already generated a boundary, if anywhere.
+    /// A second one would redefine `$mem-mod` and every lowered function.
+    boundary: Option<(std::path::PathBuf, usize)>,
 }
 
 impl Expanded {
@@ -367,6 +370,7 @@ fn expand_wat(root: &std::path::Path) -> Result<Expanded> {
         text: String::new(),
         origins: Vec::new(),
         includes: Vec::new(),
+        boundary: None,
     };
     let project = root
         .parent()
@@ -394,17 +398,62 @@ fn expand_into(
     open.push(key);
     let source = std::fs::read_to_string(file)?;
     for (index, line) in source.lines().enumerate() {
-        let Some(path) = line.trim().strip_prefix(";; @include ") else {
-            expanded.text.push_str(line);
-            expanded.text.push('\n');
-            expanded.origins.push((file.to_path_buf(), index + 1));
+        let trimmed = line.trim();
+        if let Some(path) = trimmed.strip_prefix(";; @include ") {
+            let fragment = include_path(project, path.trim())?;
+            expanded.includes.push(fragment.clone());
+            expand_into(&fragment, project, expanded, open)?;
             continue;
-        };
-        let fragment = include_path(project, path.trim())?;
-        expanded.includes.push(fragment.clone());
-        expand_into(&fragment, project, expanded, open)?;
+        }
+        if let Some(args) = directive_args(trimmed, ";; @wasi") {
+            expand_wasi(args, file, index + 1, expanded)?;
+            continue;
+        }
+        expanded.text.push_str(line);
+        expanded.text.push('\n');
+        expanded.origins.push((file.to_path_buf(), index + 1));
     }
     open.pop();
+    Ok(())
+}
+
+/// The argument list of a standalone comment directive, or `None` when the line
+/// is not that directive. `;; @wasi` and `;; @wasi stdout` both match;
+/// `;; @wasix` does not.
+fn directive_args<'a>(line: &'a str, directive: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(directive)?;
+    if rest.is_empty() {
+        return Some(rest);
+    }
+    rest.starts_with(char::is_whitespace).then(|| rest.trim())
+}
+
+/// Replace a `;; @wasi ...` line with the WASI 0.2 component boundary it names.
+/// Every generated line reports the directive as its origin, so a validator
+/// complaint about the boundary points at the line the author actually wrote.
+fn expand_wasi(
+    args: &str,
+    file: &std::path::Path,
+    line: usize,
+    expanded: &mut Expanded,
+) -> Result<()> {
+    if let Some((first, first_line)) = &expanded.boundary {
+        return fail(format!(
+            "`{}:{line}` generates a second WASI boundary; \
+             `{}:{first_line}` already generated one",
+            file.display(),
+            first.display()
+        ));
+    }
+    let boundary = crate::boundary::parse(args)
+        .map_err(|error| wasmtime::Error::msg(format!("{}:{line}: {error}", file.display())))?;
+    let text = crate::boundary::emit(&boundary);
+    for generated in text.lines() {
+        expanded.text.push_str(generated);
+        expanded.text.push('\n');
+        expanded.origins.push((file.to_path_buf(), line));
+    }
+    expanded.boundary = Some((file.to_path_buf(), line));
     Ok(())
 }
 

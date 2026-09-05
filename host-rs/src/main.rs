@@ -1,5 +1,6 @@
 //! host-rs: link + host configured WASM apps. See docs/PROJECT.md.
 
+mod boundary;
 mod cmds;
 mod component;
 mod gui;
