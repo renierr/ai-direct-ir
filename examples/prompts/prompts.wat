@@ -17,7 +17,7 @@
 ;; 0x8000+ canonical ABI bump allocation
 
 (component
-  ;; @wasi stdin stdout exit
+  ;; @wasi stdin stdout exit-with-code
 
   ;; --- application logic, ordinary Core WAT -----------------------------
   (core module $main
@@ -28,7 +28,9 @@
     (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
     ;; wasi:cli/exit replaces proc_exit: $abort and the cancel path unwind
     ;; from deep inside the prompt flow, where a return cannot reach.
-    (import "wasi" "exit" (func $exit (param i32)))
+    ;; `exit-with-code`, not `exit`: `exit` takes a `result`, so only 0 and 1
+    ;; are representable and any other value traps on the discriminant.
+    (import "wasi" "exit-with-code" (func $exit (param i32)))
 
   (func $print (param $p i32) (param $n i32)
     (call $write (call $get_stdout)
