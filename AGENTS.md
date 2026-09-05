@@ -93,6 +93,9 @@ Start with `air inspect <file>`.
   run failed. For a POSIX-style status ask for `exit-with-code` (`u8`).
   `args` imports `wasi:cli/environment`; `air run <manifest> <args...>`
   forwards everything after the manifest, with argv[0] the app name.
+- A component reads only granted directories: `root` in the manifest, or
+  `air run --dir <path> <manifest> ...`. Host options come before the manifest.
+  WASI has no global root, so an absolute path resolves nowhere by itself.
 - A WASI interface `;; @wasi` does not name is still available: declare the
   import by hand. `air` links the whole WASI 0.2 set, so the directive is a
   shorthand for the common boundary, never a gate. See `examples/sha256sum/`.

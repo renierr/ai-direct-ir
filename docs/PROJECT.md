@@ -411,6 +411,20 @@ defines the interface but not the answer. Forwarding `air run <manifest>
 world is what a runtime is for. Every runtime has this surface; `wasmtime` calls
 it `--dir` and argv passing. It is small and it closes.
 
+`air run [--dir <path>...] <manifest> [args...]` is that surface: host options
+come first so an application never has to escape its own flags away from the
+harness's, and everything from the manifest on belongs to the guest. `root` in
+the manifest grants a directory too, resolved relative to the manifest, which is
+right for a server's document root and wrong for a tool pointed at an arbitrary
+file -- hence the flag.
+
+This is also the sharpest edge a new user meets. WASI has no global filesystem
+root: a component reaches only preopened directories, and an absolute path is
+not a path to anywhere on its own. A tool that takes a file argument therefore
+has to strip a leading `/` and try each grant, as `examples/sha256sum/` does,
+and its failure message has to say what was not granted. A sandbox that refuses
+without explaining itself reads as a broken program.
+
 **The project's own ABIs.** `ai-direct:host/term`, `[[providers]]`,
 `[[bridges]]`. These extend the harness once so every application benefits,
 which is the stated point of the repository.
