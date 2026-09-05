@@ -247,6 +247,7 @@ fn repository_examples_check() {
         "examples/prompts-raw/host.toml",
         "examples/gui-hello/host.toml",
         "examples/provider-demo/host.toml",
+        "examples/tcp-hello/host.toml",
     ];
     for manifest in manifests {
         let out = run(&repo, &["check", manifest]);
@@ -256,6 +257,110 @@ fn repository_examples_check() {
             stderr(&out)
         );
     }
+}
+
+/// Connect to `addr`, retrying while the guest is still starting up. The
+/// component binds the socket itself, so there is nothing to wait on but the
+/// socket.
+fn connect(addr: &str) -> std::net::TcpStream {
+    for _ in 0..200 {
+        if let Ok(stream) = std::net::TcpStream::connect(addr) {
+            return stream;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("nothing listening on {addr}");
+}
+
+/// The WIT-derived `wasi:sockets` boundary, end to end: a component that owns
+/// its own listening socket, accepts one connection through `pollable.block`,
+/// and answers on the accepted `output-stream`.
+#[test]
+fn tcp_hello_example_serves_one_connection() {
+    let _shared = examples_lock();
+    let repo = repo();
+    // Build first: `run` would rebuild too, but then build progress and the
+    // listener would be racing for the same stderr.
+    let built = run(&repo, &["build", "examples/tcp-hello/host.toml"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+
+    let mut child = Command::new(air_bin())
+        .args(["run", "examples/tcp-hello/host.toml"])
+        .current_dir(&repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn air");
+
+    let mut socket = connect("127.0.0.1:8125");
+    socket
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .expect("send request");
+    let mut response = String::new();
+    std::io::Read::read_to_string(&mut socket, &mut response).expect("read response");
+
+    let out = child.wait_with_output().expect("wait for air");
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.ends_with("\r\n\r\nhello, air!\n"), "{response}");
+    assert!(
+        stdout(&out).contains("listening on 127.0.0.1:8125"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// `wasi:sockets` is in the linker for every component, so the grant is what
+/// decides whether it answers. Without one the run stops at
+/// `create-tcp-socket` with `access-denied`, which is error-code 1.
+#[test]
+fn a_component_reaches_the_network_only_when_granted() {
+    let _shared = examples_lock();
+    let repo = repo();
+    let source = repo.join("examples/tcp-hello");
+    let project = scratch("tcp-hello-ungranted");
+    std::fs::copy(source.join("tcp-hello.wat"), project.join("tcp-hello.wat"))
+        .expect("copy source");
+    let manifest = std::fs::read_to_string(source.join("host.toml")).expect("read manifest");
+    assert!(
+        manifest.lines().any(|line| line.trim() == "network = true"),
+        "the example no longer grants the network; this test would prove nothing"
+    );
+    let ungranted: String = manifest
+        .lines()
+        .filter(|line| line.trim() != "network = true")
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(project.join("host.toml"), &ungranted).expect("write manifest");
+
+    let denied = run(&project, &["run", "host.toml"]);
+    assert!(
+        !denied.status.success(),
+        "an ungranted socket must not open"
+    );
+    assert!(
+        stderr(&denied).contains("error-code 01"),
+        "{}",
+        stderr(&denied)
+    );
+
+    // `--net` is the shell-side grant, and it is enough on its own.
+    let mut child = Command::new(air_bin())
+        .args(["run", "--net", "host.toml"])
+        .current_dir(&project)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn air");
+    let mut socket = connect("127.0.0.1:8125");
+    socket
+        .write_all(b"GET / HTTP/1.1\r\n\r\n")
+        .expect("send request");
+    let mut response = String::new();
+    std::io::Read::read_to_string(&mut socket, &mut response).expect("read response");
+    let out = child.wait_with_output().expect("wait for air");
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert!(response.ends_with("hello, air!\n"), "{response}");
 }
 
 #[test]
@@ -710,7 +815,7 @@ fn the_wasi_directive_derives_filesystem_from_wit() {
     );
     assert!(names.contains("get-directories"), "the program calls it");
     for unasked in [
-        "open-at",
+        "descriptor.open-at",
         "read-via-stream",
         "write-via-stream",
         "metadata-hash",

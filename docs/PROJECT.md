@@ -171,13 +171,12 @@ does not say why. One directive replaces all of it:
   ;; @wasi stdin stdout stderr exit pages=2 heap=0x8000
 ```
 
-Capabilities are `stdin`, `stdout`, `stderr`, `exit` and `exit-with-code`.
-`exit` takes a `result`, so 0 and 1 are the only representable values and it
-says only whether the run failed; `exit-with-code` takes a `u8` for a
-POSIX-style status. `filesystem` generates the `wasi:filesystem/types` and
-`wasi:filesystem/preopens` imports from the vendored WASI WIT rather than
-transcribing them, narrowed to the functions the application imports from
-`"fs"` (see below). `pages=` (default 1)
+Capabilities are `stdin`, `stdout`, `stderr`, `exit`, `exit-with-code` and
+`args`. `exit` takes a `result`, so 0 and 1 are the only representable values
+and it says only whether the run failed; `exit-with-code` takes a `u8` for a
+POSIX-style status. `filesystem` and `sockets` are generated from the vendored
+WASI WIT rather than transcribed, narrowed to the functions the application
+imports from `"fs"` and `"net"` (see below). `pages=` (default 1)
 sizes the memory and `heap=` (default `0x8000`) places the canonical ABI bump
 allocator above the application's fixed addresses. An unknown word is an error,
 not a silent omission, and a second directive is rejected rather than left to
@@ -187,20 +186,23 @@ fail as a duplicate identifier in generated text.
 `wasi:io/streams` nor `wasi:io/error`, and `stdout` with `stderr` share one
 output stream and one lowered `write`. `filesystem` implies the stream
 *resources* (`read-via-stream` returns an `input-stream`) without the
-read/write *methods*, and declares the three filesystem functions
-`sha256sum` imports rather than the WIT's twenty-nine. The generated names
-are the boundary's ABI, so the application can rely on them:
+read/write *methods*, and declares the three filesystem functions `sha256sum`
+imports rather than the WIT's twenty-nine; `sockets` implies the methods too,
+because an accepted connection *is* an `input-stream` and there is no other way
+to read one. The generated names are the boundary's ABI, so the application can
+rely on them:
 
 | Name | What it is |
 | --- | --- |
 | `$mem` | core instance exporting `memory` — `(with "env" (instance $mem))` |
 | `$wasi` | core instance of lowered imports — `(with "wasi" (instance $wasi))` |
 | `$memory` / `$realloc` | the memory and its bump allocator, for lowering further imports |
-| `$fs` | core instance of lowered `wasi:filesystem` imports — `(with "fs" (instance $fs))`, short names such as `"open-at"` and `"get-directories"` |
+| `$fs` | core instance of lowered `wasi:filesystem` imports — `(with "fs" (instance $fs))`, names such as `"descriptor.open-at"` and `"get-directories"` |
+| `$net` | the same for `wasi:sockets` — `(with "net" (instance $net))`, `"create-tcp-socket"`, `"tcp-socket.accept"`, `"pollable.block"` |
 
 `$wasi` exports one Core function per capability: `get-stdin`, `read`,
-`get-stdout`, `get-stderr`, `write`, `exit`. Everything below the directive is
-ordinary Core WAT.
+`get-stdout`, `get-stderr`, `write`, `get-arguments`, `exit`. Everything below
+the directive is ordinary Core WAT.
 
 Every generated line reports the directive as its origin, so a validator
 complaint about the boundary points at the line the author wrote rather than at
@@ -211,11 +213,12 @@ text they never saw.
 The shorthand above stopped at hand-picked capabilities until `filesystem`
 proved the next step: `air` parses the vendored WASI 0.2.12 WIT
 (`air/wit/wasi-0.2.12/`, copied from `wasmtime-wasi 48`) with `wit-parser`
-and emits the `wasi:filesystem/types` and `wasi:filesystem/preopens`
-imports from it — enum cases, flags, records, variants, resources and method
-signatures — plus the aliases, canonical lowerings, and the `$fs` instance.
-Only the instance names (`$fs-types`, `$fs`, ...) are harness ABI; every type
-and signature is the WIT's.
+and emits the imports from it — enum cases, flags, records, variants,
+resources and method signatures — plus the aliases, canonical lowerings, and
+the core instance an application links. Only the instance names (`$fs-types`,
+`$net-tcp`, `$fs`, `$net`, ...) are harness ABI; every type and signature is
+the WIT's. `filesystem` and `sockets` are both generated this way; the
+difference between them is a table of interface names in `air/src/wit.rs`.
 
 The application says how much of it to generate. `wasi:filesystem` declares 29
 functions and a program calls a few, so the `(import "fs" "...")` lines are
@@ -234,13 +237,50 @@ depth. Generated lines still report the directive as their origin, so a
 validator complaint about the boundary points at the line the author wrote.
 
 Converting `examples/sha256sum/sha256sum.wat` deleted 51 hand-transcribed
-lines for one directive word, `filesystem`, with no change to the
-application's `"fs"` imports and a byte-identical digest. The emitter
-(`air/src/wit.rs`) is generic over resources, records, variants, enums,
-flags, tuples, options, results, lists, borrows, and owns; teaching `;; @wasi`
-another interface is vendoring its WIT and wiring one entry point, not
-transcribing it. Provider WIT (`ai-direct:sha256/digest`) and the remaining
-WASI interfaces still wait for the same treatment.
+lines for one directive word, `filesystem`, with no change to the application's
+`"fs"` imports and a byte-identical digest. The emitter (`air/src/wit.rs`) is
+generic over resources, records, variants, enums, flags, tuples, options,
+results, lists, borrows, and owns. Provider WIT (`ai-direct:sha256/digest`),
+`wasi:clocks` and `wasi:random` still wait for the same treatment.
+
+#### What sockets changed
+
+`wasi:sockets` is the interface that tested whether the approach generalises,
+and it moved three things.
+
+**Names are qualified by resource.** `wasi:filesystem` has no two methods
+sharing a short name, so `"open-at"` was unambiguous. `wasi:sockets` has 39
+functions with 10 collisions — `subscribe` alone belongs to five different
+resources. The rule is now that an import name is the WIT export key with its
+bracketed kind dropped: `descriptor.open-at`, `tcp-socket.subscribe`,
+`get-directories`. It is unique across a package by construction, needs no
+second rule, and cost `sha256sum` three edited import lines. Its artifact went
+from 5959 to 6033 bytes: longer export names, plus the per-interface prefix the
+generic emitter gives its generated identifiers (`$fs-types-descriptor-open-at`
+rather than `$fs-descriptor-open-at`), which lands in the name section.
+
+**Interfaces share their declarations.** `wasi:sockets` spreads a TCP listener
+over `wasi:io/poll`, `wasi:sockets/network`, `instance-network`, `tcp` and
+`tcp-create-socket`. `error-code`, `network` and `pollable` are each declared
+once, by the interface that owns them, and `(alias export ...)`-ed into the
+others — the general form of the trick the `wasi:filesystem/preopens`
+`descriptor` re-export needed, which is no longer a special case in the code.
+An interface that contributes only a type contributes no functions:
+`wasi:clocks/monotonic-clock` supplies `duration` to the keep-alive setters
+without making clock reads part of the sockets capability.
+
+**Sockets are a host grant.** `air` links the whole WASI 0.2 set, but
+`wasmtime`'s `WasiCtxBuilder` disables TCP, UDP and name lookup by default, so
+before this every `wasi:sockets` call would have answered `access-denied`.
+`network = true` in the manifest, or `air run --net`, is the grant — the same
+"nothing is reachable unless it asks" rule the directory grants follow, and the
+same category as `--dir`: WASI defines the interface, not the answer.
+
+`examples/tcp-hello/` is the proof: it binds 127.0.0.1:8125, blocks on a
+`pollable`, accepts one connection, answers on the accepted `output-stream`,
+and exits. It imports nine of the 39 functions and its artifact is 5859 bytes.
+`air/tests/cli.rs` drives it over a real socket and checks that removing the
+grant stops the run at `create-tcp-socket` with error-code 1.
 
 Converting the four component sources removed 208 lines and changed no
 behavior:
@@ -299,6 +339,13 @@ Narrowing that boundary to the application's own `"fs"` imports halved the
 artifact (11596 to 5959 bytes) with the digest, the error paths, and the
 line-accurate diagnostics all re-verified afterwards.
 
+`examples/tcp-hello/` extends the same machinery to `wasi:sockets`: `air check`
+passes, `air run` binds 127.0.0.1:8125 and answers a real `curl`, and
+`air/tests/cli.rs` drives it over a `TcpStream` and asserts that removing
+`network = true` stops the run at `create-tcp-socket` with error-code 1. Unit
+tests pin that the boundary declares nine of the WIT's 39 functions, shares one
+`error-code` declaration across the TCP interfaces, and carries no UDP.
+
 Fresh native, browser, and GUI scaffolds have completed their applicable
 `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
@@ -311,8 +358,17 @@ rebuild.
 - No build-time composition, so a component app ships alongside its providers
   rather than as one fused artifact, and resource handles cannot cross a
   provider boundary.
-- `ui.*` and `net.*` are not available to components: their signatures pass
-  raw pointers and need value-based replacements first.
+- `ui.*` is not available to components: its signatures pass raw pointers and
+  need value-based replacements first.
+- The generated boundary emits no `(canon resource.drop ...)`, so a component
+  cannot close a handle it owns. Handles are released when the store drops,
+  which is why `examples/tcp-hello/` serves one connection and exits. A
+  long-running server needs one drop per resource type it accepts.
+- `mode = "server"` and the `net.*` host syscalls are now redundant for
+  components, which bind their own sockets through `wasi:sockets`. They remain
+  because `examples/server/` is a Core app that links `libs/http/http.wasm`,
+  and the component text format cannot embed a prebuilt `.wasm` (see the
+  composition gap below).
 - Validation-error mapping to source lines is Core-module-only in practice: a
   component with several core modules reports the module index, but the include
   map only tracks one function-index space per module.
@@ -433,10 +489,15 @@ A component imports a project-owned interface exactly as it imports a WASI one;
 the harness supplies it through the component linker. `ai-direct:host/term`
 exposes the terminal capability that Core apps reach through `term.*`.
 
-`ui.*` and `net.*` have not followed, for a reason that is not about WASI:
-their Core signatures pass pointers into guest memory, which has no meaning
-across a component boundary. They need value-based signatures (`string`,
-`list<u8>`) first. That is a redesign, not a blocker.
+`ui.*` has not followed, for a reason that is not about WASI: its Core
+signatures pass pointers into guest memory, which has no meaning across a
+component boundary. It needs value-based signatures (`string`, `list<u8>`)
+first. That is a redesign, not a blocker.
+
+`net.*` does not need the trip at all. It exists because Core WASM had no
+sockets; a component asks for `;; @wasi sockets` and gets `wasi:sockets`
+straight from the WIT, as `examples/tcp-hello/` does. The Core `net.*` ABI and
+`mode = "server"` stay only for `examples/server/`, and they retire with it.
 
 ### What Actually Needs A Harness Change
 
@@ -478,13 +539,18 @@ without explaining itself reads as a broken program.
 `[[bridges]]`. These extend the harness once so every application benefits,
 which is the stated point of the repository.
 
-So the shorthand is the only thing that grows per interface, and the fix is
-underway: `filesystem` is generated from the interface's own WIT -- which ships
-with Wasmtime and is what `examples/sha256sum/`'s enum was transcribed from --
-and narrowed by the application's own imports, instead of being hardcoded
-capability by capability. Doing the same for `sockets` and `clocks` ends the
-category. Until then, hand-writing a rare import is a declaration an author
-makes once.
+So the shorthand was the only thing that grew per interface, and it no longer
+does: `filesystem` and `sockets` are both generated from the interface's own
+WIT -- which ships with Wasmtime and is what `examples/sha256sum/`'s enum was
+transcribed from -- and narrowed by the application's own imports. Adding
+`wasi:clocks` or `wasi:random` is a table entry in `air/src/wit.rs`, not new
+emitter code. Hand-writing a rare import remains available, and is a
+declaration an author makes once.
+
+Sockets did add one entry to the host-policy category, and it belongs there:
+`wasmtime` disables TCP, UDP and name lookup by default, so whether a guest may
+open a socket is an answer the runtime has to give. `network = true` in the
+manifest and `air run --net` are that answer, next to `[[dirs]]` and `--dir`.
 
 ### Granting Directories, And Where An App Keeps State
 
@@ -521,6 +587,17 @@ WASI has no global filesystem root, which is the sharpest edge here: an absolute
 path is not a path to anywhere on its own. A tool that takes a file argument
 strips a leading `/` and tries each grant, as `examples/sha256sum/` does, so
 `--dir /` makes an absolute path behave the way a shell user expects.
+
+The network is the same kind of grant, with one switch rather than a path:
+
+```toml
+network = true     # `wasi:sockets` answers; without this, access-denied
+```
+
+`air run --net <manifest>` is the shell-side form, for a manifest that does not
+ask. One grant covers TCP, UDP and name lookup, because the boundary already
+declares nothing the application did not import: `examples/tcp-hello/` imports
+nine TCP functions and therefore cannot reach UDP whatever the grant says.
 
 ### Consuming Someone Else's Compiled Work
 
@@ -648,21 +725,23 @@ Ordered so that each step is provable on its own, and so the catalog stops
 being specification-only before more specification is written.
 
 1. Extend the WIT-driven boundary to the remaining interfaces and provider
-    contracts. `filesystem` is generated from the vendored WASI WIT; sockets,
-    clocks, and the catalog's provider WIT still go through hand-written
-    declarations. Granularity is settled — the application's own imports name
-    what to generate — so a new interface reuses that rule rather than dragging
-    its whole surface in. This is the step that stops the shorthand from growing
-    per interface. See The Boundary From WIT and What Actually Needs A Harness
-    Change.
+    contracts. `filesystem` and `sockets` are generated from the vendored WASI
+    WIT; `wasi:clocks`, `wasi:random` and the catalog's provider WIT still go
+    through hand-written declarations. Both the granularity rule (the
+    application's own imports name what to generate) and the naming rule (the
+    WIT export key, minus its bracketed kind) are settled, so a new interface
+    is a table entry. Emitting `(canon resource.drop ...)` is the one real
+    piece of work left in this area, and `examples/tcp-hello/` is what needs
+    it. See The Boundary From WIT and What Actually Needs A Harness Change.
 2. Continue up the memory ladder: records with named fields, then an
    allocator. Segment addresses are handled (see Harness-Placed Segments), but
    an application with dynamic collections needs both, and neither should be
    designed before a real application states its requirements. Grow the mail
    example far enough to state them.
-3. Give `ui.*` and `net.*` value-based signatures so components can import
-   them, then convert `gui-hello`. `term.*` already made the trip as
-   `ai-direct:host/term`.
+3. Give `ui.*` value-based signatures so components can import it, then
+   convert `gui-hello`. `term.*` already made the trip as
+   `ai-direct:host/term`; `net.*` needs no trip, because a component reaches
+   `wasi:sockets` directly.
 4. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing. See Provider Linking above.
 5. Add a separate component consumer proof in the mail example. Do not force

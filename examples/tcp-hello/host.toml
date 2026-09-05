@@ -1,0 +1,13 @@
+# A WASI 0.2 component that listens on a TCP port itself.
+#
+# `network = true` is the grant: `wasi:sockets` is linked for every component,
+# and every call answers `access-denied` until the host says otherwise. The
+# shell-side equivalent is `air run --net`.
+target = "component"
+mode = "command"
+network = true
+
+[app]
+source = "tcp-hello.wat"
+path = "tcp-hello.wasm"
+run = "wasi:cli/run"

@@ -20,6 +20,10 @@ pub struct GuestEnv {
     pub args: Vec<String>,
     /// Each granted directory and whether the guest may write in it.
     pub dirs: Vec<(String, bool)>,
+    /// Whether the guest may open sockets. Off unless asked for, like a
+    /// directory: `wasi:sockets` links either way, but every call answers
+    /// `access-denied` until the host says otherwise.
+    pub network: bool,
 }
 
 impl GuestEnv {

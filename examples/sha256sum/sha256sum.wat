@@ -43,8 +43,10 @@
     (import "wasi" "get-arguments" (func $get_args (param i32)))
     (import "wasi" "exit-with-code" (func $exit (param i32)))
     (import "fs" "get-directories" (func $get_dirs (param i32)))
-    (import "fs" "open-at" (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
-    (import "fs" "read-via-stream" (func $read_via_stream (param i32 i64 i32)))
+    (import "fs" "descriptor.open-at"
+      (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
+    (import "fs" "descriptor.read-via-stream"
+      (func $read_via_stream (param i32 i64 i32)))
     (import "provider" "hash-hex" (func $hash_hex (param i32 i32 i32)))
 
     (global $BUF i32 (i32.const 0x10000))

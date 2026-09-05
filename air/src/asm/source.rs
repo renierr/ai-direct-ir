@@ -1,8 +1,6 @@
 //! Expanding a root WAT source into one assemblable text: `;; @include`
 //! fragments, the `;; @wasi` boundary, and the `;; @data` region.
 
-use std::collections::BTreeSet;
-
 use wasmtime::Result;
 
 use crate::fail;
@@ -188,7 +186,7 @@ fn record_wasi(
 /// This runs after the whole source is expanded because the boundary is not a
 /// function of the directive alone: `wasi:filesystem` declares 29 functions and
 /// an application names the few it calls, as `(import "fs" ...)` lines that may
-/// live in any included fragment. Every generated line reports the directive as
+/// live in any included fragment; `wasi:sockets` is larger still. Every generated line reports the directive as
 /// its origin, so a validator complaint about the boundary points at the line
 /// the author actually wrote.
 fn expand_boundary(expanded: &mut Expanded) -> Result<()> {
@@ -196,21 +194,21 @@ fn expand_boundary(expanded: &mut Expanded) -> Result<()> {
         return Ok(());
     };
     let (file, line, at) = (directive.file.clone(), directive.line, directive.at);
-    let text = crate::boundary::emit(&directive.boundary, &fs_imports(&expanded.text))
+    let text = crate::boundary::emit(&directive.boundary, &guest_imports(&expanded.text))
         .map_err(|error| directive_error(&file, line, &error))?;
     splice(expanded, at, &text, (file, line));
     Ok(())
 }
 
-/// The short names the expanded source imports from `"fs"`, which is what
-/// `;; @wasi filesystem` generates a boundary for.
-fn fs_imports(text: &str) -> BTreeSet<String> {
-    scan_module(text)
-        .imports
-        .into_iter()
-        .filter(|(module, _)| module == "fs")
-        .map(|(_, name)| name)
-        .collect()
+/// What the expanded source imports, grouped by import module. The `"fs"` and
+/// `"net"` groups are what `;; @wasi filesystem` and `;; @wasi sockets`
+/// generate their boundaries for.
+fn guest_imports(text: &str) -> crate::boundary::Imports {
+    let mut imports = crate::boundary::Imports::new();
+    for (module, name) in scan_module(text).imports {
+        imports.entry(module).or_default().insert(name);
+    }
+    imports
 }
 
 /// Insert `generated` before expanded line index `at`, crediting every inserted

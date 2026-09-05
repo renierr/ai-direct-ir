@@ -54,6 +54,8 @@ generic design changes.
 - `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `host.toml`;
   every manifest declares `source`, so the artifact is rebuilt from the WAT
 - `examples/server/` — `server.wat`, `manifest.toml`, `www/` demo root
+- `examples/tcp-hello/` — a component that binds its own socket through
+  `wasi:sockets`; `examples/sha256sum/` — the same for `wasi:filesystem`
 - `libs/http/` — hand-written WAT lib; `libs/sha256/` (`sha2`) and
   `libs/text-width/` (`unicode-width`) — Rust crates
 - `native/` and `tools/` — legacy experiments; `docs/PROJECT.md` — living state
@@ -104,10 +106,21 @@ Start with `air inspect <file>`.
 - Nothing is writable unless it asks. A stateful app declares
   `[[dirs]] path = "data"` with `write = true`, which `air` creates on first
   run; that is where a database or cache belongs.
-- `;; @wasi filesystem` reads the application's `(import "fs" "...")` lines and
-  generates exactly those functions from the vendored WASI WIT. Import what the
-  program calls; a name the WIT does not have, or `filesystem` with no `"fs"`
-  import at all, fails the build.
+- `;; @wasi filesystem` and `;; @wasi sockets` read the application's
+  `(import "fs" "...")` / `(import "net" "...")` lines and generate exactly
+  those functions from the vendored WASI WIT. Import what the program calls; a
+  name the WIT does not have, or a capability with no import at all, fails the
+  build.
+- An import name is the WIT export key with its bracketed kind dropped:
+  `descriptor.open-at`, `tcp-socket.subscribe`, `get-directories`. Methods are
+  qualified by their resource because five `wasi:sockets` resources have a
+  `subscribe`. Adding an interface is a table entry in `air/src/wit.rs`, never
+  a transcribed type graph.
+- Nothing is reachable unless it asks. `wasi:sockets` is linked for every
+  component and answers `access-denied` until `network = true` in the manifest
+  or `air run --net` grants it — the same rule as `[[dirs]]` and `--dir`. The
+  generated boundary emits no `resource.drop` yet, so a component cannot close
+  a handle it owns; `examples/tcp-hello/` serves one connection and exits.
 - A WASI interface `;; @wasi` does not name is still available: declare the
   import by hand. `air` links the whole WASI 0.2 set, so the directive is a
   shorthand for the common boundary, never a gate. See `examples/sha256sum/`.

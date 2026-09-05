@@ -39,6 +39,12 @@ fn guest_env(args: &[String]) -> wasmtime::Result<(cmds::GuestEnv, &[String])> {
                 env.dirs.push((dir.clone(), first == "--dir-rw"));
                 rest = &rest[2..];
             }
+            // A socket is a grant like a directory: `wasi:sockets` is linked
+            // either way, and every call answers `access-denied` without this.
+            "--net" => {
+                env.network = true;
+                rest = &rest[1..];
+            }
             _ => break,
         }
     }

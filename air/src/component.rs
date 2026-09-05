@@ -97,6 +97,22 @@ pub fn link_all(
     ];
     argv.extend(env.args.iter().cloned());
     builder.args(&argv);
+    // Nothing is reachable unless it asks. `wasi:sockets` is linked for every
+    // component, so without this grant a `bind` answers `access-denied` --
+    // which is the right default, and the same rule the directory grants
+    // follow. Name lookup rides along: a program that may open a connection
+    // may work out where to open it.
+    if manifest.network || env.network {
+        // `inherit_network` only settles *which addresses* are allowed; TCP,
+        // UDP and name lookup are each disabled by default and gated
+        // separately. One grant opens all three -- the boundary already
+        // declares nothing an application did not import, so a TCP-only
+        // program cannot reach UDP regardless.
+        builder.inherit_network();
+        builder.allow_tcp(true);
+        builder.allow_udp(true);
+        builder.allow_ip_name_lookup(true);
+    }
     // `--dir <path>` grants one directory, named to the guest exactly as it was
     // written. A tool that reads whatever file it is pointed at needs this, and
     // making it explicit is the point: nothing is readable by default.

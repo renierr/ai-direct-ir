@@ -26,7 +26,8 @@
 //! - `$fs-pre` — the `wasi:filesystem/preopens` import.
 //! - `$fs` — the core instance gathering every lowered filesystem function.
 //!   An application links it like the WASI one: `(with "fs" (instance $fs))`
-//!   and imports short names such as `"open-at"` and `"get-directories"`.
+//!   and imports the names `import_name` derives — `"descriptor.open-at"`,
+//!   `"get-directories"`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -35,165 +36,313 @@ use wit_parser::{FunctionKind, InterfaceId, Resolve, Type, TypeDefKind, TypeId};
 const IO_WIT: &str = include_str!("../wit/wasi-0.2.12/io.wit");
 const CLOCKS_WIT: &str = include_str!("../wit/wasi-0.2.12/clocks.wit");
 const FILESYSTEM_WIT: &str = include_str!("../wit/wasi-0.2.12/filesystem.wit");
+const SOCKETS_WIT: &str = include_str!("../wit/wasi-0.2.12/sockets.wit");
 
-/// One lowered filesystem function: the short name the application imports
-/// from `"fs"` and the component-level function it lowers. Every filesystem
-/// lowering takes `(memory $memory) (realloc $realloc)`, so there is nothing
-/// per-function to decide (see `emit_func`).
-pub struct FsLower {
+/// One lowered function: the name the application imports from the
+/// capability's instance (see `import_name`) and the component-level function
+/// it lowers. Every lowering takes `(memory $memory) (realloc $realloc)`, so
+/// there is nothing per-function to decide (see `emit_func`).
+pub struct Lower {
     pub export: String,
     pub func: String,
 }
 
-/// The generated filesystem boundary: import text plus aliases, and the
-/// lowering list `boundary.rs` turns into `$fs`.
-pub struct Filesystem {
+/// One generated boundary: import text plus aliases, and the lowering list
+/// `boundary.rs` turns into a core instance.
+pub struct Generated {
     pub wat: String,
-    pub lowers: Vec<FsLower>,
+    pub lowers: Vec<Lower>,
 }
 
-/// Parse the vendored WASI WIT and emit the `wasi:filesystem` boundary for the
-/// short names `used` — the ones the application imports from `"fs"`.
+/// A capability `;; @wasi` can generate: which WIT interfaces it declares, and
+/// the names the harness gives them.
+pub struct Capability {
+    /// The core instance an application links: `(with "fs" (instance $fs))`.
+    pub instance: &'static str,
+    /// Prefix for every generated WAT identifier.
+    prefix: &'static str,
+    /// The WIT package this capability is, for error messages and the header.
+    package: &'static str,
+    /// The vendored file that is its source of truth.
+    source: &'static str,
+    /// Interfaces in dependency order: one may only `use` types from an
+    /// interface declared before it.
+    interfaces: &'static [Interface],
+}
+
+struct Interface {
+    /// Fully-qualified WIT interface name.
+    wit: &'static str,
+    /// Suffix for this interface's instance variable: `$fs-types`.
+    var: &'static str,
+    /// False when the interface is here only as a type source for a later one.
+    /// `wasi:filesystem` needs `datetime` from `wasi:clocks/wall-clock`; that
+    /// does not make reading the clock part of the filesystem capability.
+    functions: bool,
+}
+
+/// `;; @wasi filesystem`. `wasi:clocks/wall-clock` supplies the one type
+/// (`datetime`) the filesystem graph needs beyond `wasi:io`.
+pub const FILESYSTEM: Capability = Capability {
+    instance: "fs",
+    prefix: "$fs",
+    package: "wasi:filesystem",
+    source: "air/wit/wasi-0.2.12/filesystem.wit",
+    interfaces: &[
+        Interface {
+            wit: "wasi:clocks/wall-clock@0.2.12",
+            var: "clock",
+            functions: false,
+        },
+        Interface {
+            wit: "wasi:filesystem/types@0.2.12",
+            var: "types",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:filesystem/preopens@0.2.12",
+            var: "pre",
+            functions: true,
+        },
+    ],
+};
+
+/// `;; @wasi sockets`. `wasi:io/poll` comes along with functions, not just
+/// types: `pollable.block` is how a guest waits for a connection, and there is
+/// no synchronous accept in WASI 0.2. `wasi:clocks/monotonic-clock` supplies
+/// `duration` for the keep-alive setters and nothing else.
+pub const SOCKETS: Capability = Capability {
+    instance: "net",
+    prefix: "$net",
+    package: "wasi:sockets",
+    source: "air/wit/wasi-0.2.12/sockets.wit",
+    interfaces: &[
+        Interface {
+            wit: "wasi:clocks/monotonic-clock@0.2.12",
+            var: "clock",
+            functions: false,
+        },
+        Interface {
+            wit: "wasi:io/poll@0.2.12",
+            var: "poll",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/network@0.2.12",
+            var: "network",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/instance-network@0.2.12",
+            var: "inst",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/ip-name-lookup@0.2.12",
+            var: "lookup",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/tcp@0.2.12",
+            var: "tcp",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/tcp-create-socket@0.2.12",
+            var: "tcp-new",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/udp@0.2.12",
+            var: "udp",
+            functions: true,
+        },
+        Interface {
+            wit: "wasi:sockets/udp-create-socket@0.2.12",
+            var: "udp-new",
+            functions: true,
+        },
+    ],
+};
+
+/// Parse the vendored WASI WIT and emit `capability`'s boundary for the names
+/// `used` — the ones the application imports from its instance.
 ///
-/// Every type and signature below comes from that WIT. Only the instance
-/// variable names (`$fs-types`, `$fs`, ...) are the harness's own ABI, exactly
-/// like `$mem` and `$wasi`.
-pub fn filesystem(used: &BTreeSet<String>) -> wasmtime::Result<Filesystem> {
-    let mut resolve = Resolve::new();
-    for (path, contents) in [
-        ("wasi-0.2.12/io.wit", IO_WIT),
-        ("wasi-0.2.12/clocks.wit", CLOCKS_WIT),
-        ("wasi-0.2.12/filesystem.wit", FILESYSTEM_WIT),
-    ] {
-        resolve.push_source(path, contents).map_err(|error| {
-            wasmtime::Error::msg(format!("invalid vendored WIT `{path}`: {error:#}"))
-        })?;
-    }
-    let wall_clock = interface(&resolve, "wasi:clocks/wall-clock@0.2.12")?;
-    let types = interface(&resolve, "wasi:filesystem/types@0.2.12")?;
-    let preopens = interface(&resolve, "wasi:filesystem/preopens@0.2.12")?;
+/// Every type and signature comes from that WIT. Only the instance variable
+/// names (`$fs-types`, `$net-tcp`, ...) are the harness's own ABI, exactly like
+/// `$mem` and `$wasi`.
+pub fn generate(capability: &Capability, used: &BTreeSet<String>) -> wasmtime::Result<Generated> {
+    let resolve = resolve()?;
+    let ids = capability
+        .interfaces
+        .iter()
+        .map(|iface| interface(&resolve, iface.wit))
+        .collect::<wasmtime::Result<Vec<_>>>()?;
 
     // What the application imports decides what the boundary declares. An
     // unknown name is an error rather than an import that fails to link with
     // the WIT's whole catalogue as the only hint.
-    let catalog = catalog(&resolve, &[types, preopens])?;
+    let catalog = catalog(&resolve, capability, &ids)?;
     let mut wanted: HashSet<String> = HashSet::new();
     for name in used {
         let Some((_, wit_name)) = catalog.get(name) else {
             return Err(wasmtime::Error::msg(format!(
-                "`(import \"fs\" \"{name}\" ...)` names no `wasi:filesystem` function; \
-                 the boundary exports only what the vendored WIT declares"
+                "`(import \"{}\" \"{name}\" ...)` names no `{}` function; \
+                 the boundary exports only what `{}` declares",
+                capability.instance, capability.package, capability.source
             )));
         };
         wanted.insert(wit_name.clone());
     }
     // Types the wanted signatures reach, and nothing else: the 37-case
-    // `error-code` enum and the `descriptor-stat` record cost real bytes in
+    // `error-code` enums and the `descriptor-stat` record cost real bytes in
     // every artifact that declares them.
     let mut keep: HashSet<TypeId> = HashSet::new();
-    for id in [types, preopens] {
-        for (wit_name, func) in &resolve.interfaces[id].functions {
+    for id in &ids {
+        for (wit_name, func) in &resolve.interfaces[*id].functions {
             if wanted.contains(wit_name) {
                 reach_func(&resolve, func, &mut keep);
             }
         }
     }
-    let uses_preopens = resolve.interfaces[preopens]
-        .functions
-        .keys()
-        .any(|wit_name| wanted.contains(wit_name));
-    if uses_preopens {
-        // `preopens` re-exports the `descriptor` resource, so `$fs-types` must
-        // export it even when no descriptor method is in play.
-        keep.insert(descriptor_id(&resolve, types)?);
-    }
 
-    let mut out = String::new();
-    out.push_str(
-        "  ;; --- wasi:filesystem boundary, generated from WIT ----------------------\n\
-         \x20 ;; `air/wit/wasi-0.2.12/filesystem.wit` is the source of truth.\n",
+    let heading = format!(
+        "  ;; --- {} boundary, generated from WIT ",
+        capability.package
     );
+    let mut out = heading.clone();
+    out.push_str(&"-".repeat(78usize.saturating_sub(heading.len())));
+    out.push_str(&format!(
+        "\n  ;; `{}` is the source of truth.\n",
+        capability.source
+    ));
 
-    // `wasi:clocks/wall-clock`, `datetime` only: the one foreign type the
-    // filesystem graph needs beyond `wasi:io`. Structural, like every other
-    // generated declaration, and skipped when no wanted signature reaches it.
-    let datetime = datetime_id(&resolve, wall_clock)?;
-    let mut foreign: HashMap<TypeId, String> = HashMap::new();
-    if keep.contains(&datetime) {
-        // `instance` stays empty: it names the alias source for functions, and
-        // this emitter emits one type and no functions.
-        let mut clock = Emitter::new(&resolve, "$fs-clock");
-        clock.emit_type(wall_clock, "datetime", datetime)?;
-        // Declare-then-export: an inline instance export only takes `eq`/`sub`.
-        out.push_str(&clock.finish_instance("$fs-clock", "wasi:clocks/wall-clock@0.2.12"));
-        out.push_str("  (alias export $fs-clock \"datetime\" (type $fs-datetime))\n\n");
-        foreign.insert(canon(&resolve, datetime), "$fs-datetime".to_string());
-    }
-    // `wasi:io` resources arrive through the `@wasi` streams boundary, which
-    // `filesystem` implies (see `Boundary::streams`). Refer to those names
-    // directly, the way the hand-written boundary did.
+    // `wasi:io` streams arrive through the `@wasi` streams boundary, which
+    // every generated capability implies (see `Boundary::streams`). Refer to
+    // those names directly, the way the hand-written boundary did.
+    let mut outer: HashMap<TypeId, String> = HashMap::new();
     for (name, wat) in [
         ("input-stream", "$istream"),
         ("output-stream", "$ostream"),
         ("error", "$error"),
     ] {
-        foreign.insert(canon(&resolve, io_type(&resolve, name)?), wat.to_string());
+        outer.insert(canon(&resolve, io_type(&resolve, name)?), wat.to_string());
     }
 
-    let mut types_emitter = Emitter::with_foreign(&resolve, "$fs", foreign);
-    let types_lowers = types_emitter.emit_interface(types, "$fs-types", &keep, &wanted)?;
-    out.push_str(&types_emitter.finish_instance("$fs-types", "wasi:filesystem/types@0.2.12"));
-    for alias in &types_emitter.aliases {
-        out.push_str(alias);
-        out.push('\n');
-    }
-    out.push('\n');
-
-    let mut lowers = types_lowers;
-    if uses_preopens {
-        // Alias the types instance's `descriptor` export first, the way a
-        // hand-written import must. The new emitter resolves nothing else from
-        // the types instance: every other name it needs is local (or a
-        // `string`).
-        out.push_str("  (alias export $fs-types \"descriptor\" (type $fs-pre-desc))\n");
-        let mut pre_emitter = Emitter::new(&resolve, "$fs-pre");
-        pre_emitter
-            .names
-            .insert(descriptor_id(&resolve, types)?, "$fs-pre-desc".to_string());
-        let pre_lowers = pre_emitter.emit_interface(preopens, "$fs-pre", &keep, &wanted)?;
-        out.push_str(&pre_emitter.finish_instance("$fs-pre", "wasi:filesystem/preopens@0.2.12"));
-        for alias in &pre_emitter.aliases {
+    // Which instance exports each type already declared, so a later interface
+    // can alias it instead of redeclaring the graph behind it. `wasi:sockets`
+    // makes this pay: one `error-code` enum serves `tcp`, `udp` and lookups.
+    let mut declared: HashMap<TypeId, (String, String)> = HashMap::new();
+    let mut lowers = Vec::new();
+    for (iface, id) in capability.interfaces.iter().zip(&ids) {
+        let kept_types: Vec<(String, TypeId)> = resolve.interfaces[*id]
+            .types
+            .iter()
+            .filter(|(_, type_id)| keep.contains(type_id))
+            .map(|(name, type_id)| (name.clone(), *type_id))
+            .collect();
+        let kept_funcs = resolve.interfaces[*id]
+            .functions
+            .keys()
+            .any(|wit_name| wanted.contains(wit_name));
+        if kept_types.is_empty() && !kept_funcs {
+            continue;
+        }
+        let var = format!("{}-{}", capability.prefix, iface.var);
+        // An inline instance export only takes `eq`/`sub`, so a type this
+        // interface `use`s has to be bound to an outer name before the import
+        // that references it.
+        let mut foreign = outer.clone();
+        for (name, type_id) in &kept_types {
+            let TypeDefKind::Type(Type::Id(inner)) = &resolve.types[*type_id].kind else {
+                continue;
+            };
+            let target = canon(&resolve, *inner);
+            if foreign.contains_key(&target) {
+                continue;
+            }
+            let Some((source_var, source_name)) = declared.get(&target) else {
+                continue;
+            };
+            let alias = format!("{var}-{name}");
+            out.push_str(&format!(
+                "  (alias export {source_var} \"{source_name}\" (type {alias}))\n"
+            ));
+            foreign.insert(target, alias);
+        }
+        let mut emitter = Emitter::new(&resolve, &var, foreign);
+        lowers.extend(emitter.emit_interface(*id, &var, &keep, &wanted)?);
+        out.push_str(&emitter.finish_instance(&var, iface.wit));
+        for alias in &emitter.aliases {
             out.push_str(alias);
             out.push('\n');
         }
-        lowers.extend(pre_lowers);
+        out.push('\n');
+        for (name, type_id) in &kept_types {
+            declared
+                .entry(canon(&resolve, *type_id))
+                .or_insert((var.clone(), name.clone()));
+        }
     }
-    Ok(Filesystem { wat: out, lowers })
+    Ok(Generated { wat: out, lowers })
 }
 
-/// Every function the filesystem interfaces offer, keyed by the short name it
-/// would take in the flat `"fs"` namespace. Two interfaces must not offer the
-/// same short name: the application imports one instance.
+/// The vendored WASI WIT, parsed. Pushed in dependency order.
+fn resolve() -> wasmtime::Result<Resolve> {
+    let mut resolve = Resolve::new();
+    for (path, contents) in [
+        ("wasi-0.2.12/io.wit", IO_WIT),
+        ("wasi-0.2.12/clocks.wit", CLOCKS_WIT),
+        ("wasi-0.2.12/filesystem.wit", FILESYSTEM_WIT),
+        ("wasi-0.2.12/sockets.wit", SOCKETS_WIT),
+    ] {
+        resolve.push_source(path, contents).map_err(|error| {
+            wasmtime::Error::msg(format!("invalid vendored WIT `{path}`: {error:#}"))
+        })?;
+    }
+    Ok(resolve)
+}
+
+/// Every function `capability` offers, keyed by the name it takes in the flat
+/// instance namespace. Two interfaces must not offer the same name: the
+/// application imports one instance.
 fn catalog(
     resolve: &Resolve,
-    interfaces: &[InterfaceId],
+    capability: &Capability,
+    ids: &[InterfaceId],
 ) -> wasmtime::Result<BTreeMap<String, (InterfaceId, String)>> {
     let mut catalog = BTreeMap::new();
-    for id in interfaces {
+    for (iface, id) in capability.interfaces.iter().zip(ids) {
+        if !iface.functions {
+            continue;
+        }
         for wit_name in resolve.interfaces[*id].functions.keys() {
-            // Map keys carry `[method]resource.name` for methods and the bare
-            // name for freestanding functions; `$fs` wants the last segment.
-            let short = wit_name.rsplit('.').next().unwrap_or(wit_name).to_string();
-            if let Some((other, _)) = catalog.insert(short.clone(), (*id, wit_name.clone())) {
+            let name = import_name(wit_name).to_string();
+            if let Some((other, _)) = catalog.insert(name.clone(), (*id, wit_name.clone())) {
                 return Err(wasmtime::Error::msg(format!(
-                    "`{}` and `{}` both export `{short}`; cannot share one `$fs` namespace",
+                    "`{}` and `{}` both export `{name}`; cannot share one `${}` namespace",
                     resolve.id_of(other).unwrap_or_default(),
                     resolve.id_of(*id).unwrap_or_default(),
+                    capability.instance,
                 )));
             }
         }
     }
     Ok(catalog)
+}
+
+/// The name an application imports a WIT function under.
+///
+/// A WIT export key already qualifies a method by its resource
+/// (`[method]descriptor.open-at`); dropping the bracketed kind leaves a name
+/// that is unique across a whole package and needs no further rule:
+/// `descriptor.open-at`, `tcp-socket.subscribe`, `get-directories`. Bare short
+/// names would not do — `wasi:sockets` has five different `subscribe`s.
+fn import_name(wit_name: &str) -> &str {
+    match wit_name.split_once(']') {
+        Some((kind, rest)) if kind.starts_with('[') => rest,
+        _ => wit_name,
+    }
 }
 
 /// Every type one function's signature reaches, transitively. A resource's
@@ -283,22 +432,6 @@ fn io_type(resolve: &Resolve, name: &str) -> wasmtime::Result<TypeId> {
     )))
 }
 
-fn datetime_id(resolve: &Resolve, wall_clock: InterfaceId) -> wasmtime::Result<TypeId> {
-    resolve.interfaces[wall_clock]
-        .types
-        .get("datetime")
-        .copied()
-        .ok_or_else(|| wasmtime::Error::msg("wasi:clocks/wall-clock has no type `datetime`"))
-}
-
-fn descriptor_id(resolve: &Resolve, types: InterfaceId) -> wasmtime::Result<TypeId> {
-    resolve.interfaces[types]
-        .types
-        .get("descriptor")
-        .copied()
-        .ok_or_else(|| wasmtime::Error::msg("wasi:filesystem/types has no type `descriptor`"))
-}
-
 /// Follow `use` alias chains to the defining typedef. A reference to
 /// `input-stream` may name the alias or the original; both denote one type.
 fn canon(resolve: &Resolve, mut id: TypeId) -> TypeId {
@@ -337,11 +470,7 @@ struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    fn new(resolve: &'a Resolve, prefix: &str) -> Self {
-        Self::with_foreign(resolve, prefix, HashMap::new())
-    }
-
-    fn with_foreign(resolve: &'a Resolve, prefix: &str, foreign: HashMap<TypeId, String>) -> Self {
+    fn new(resolve: &'a Resolve, prefix: &str, foreign: HashMap<TypeId, String>) -> Self {
         Self {
             resolve,
             prefix: prefix.to_string(),
@@ -367,7 +496,7 @@ impl<'a> Emitter<'a> {
         instance: &str,
         keep: &HashSet<TypeId>,
         wanted: &HashSet<String>,
-    ) -> wasmtime::Result<Vec<FsLower>> {
+    ) -> wasmtime::Result<Vec<Lower>> {
         self.instance = instance.to_string();
         // Types first, in interface order: WIT declares before use.
         let type_names: Vec<(String, TypeId)> = self.resolve.interfaces[id]
@@ -613,7 +742,7 @@ impl<'a> Emitter<'a> {
         owner: InterfaceId,
         wit_name: &str,
         func: &wit_parser::Function,
-    ) -> wasmtime::Result<FsLower> {
+    ) -> wasmtime::Result<Lower> {
         if func.kind.is_async() {
             return Err(wasmtime::Error::msg(format!(
                 "WIT function `{wit_name}` is async; the generated boundary is synchronous"
@@ -622,7 +751,10 @@ impl<'a> Emitter<'a> {
         // The functions map keys short names for freestanding functions and
         // the full `[method]resource.name` form for methods; the export name
         // is the key as-is.
-        let (export, short, alias) = match &func.kind {
+        // The instance export name is the WIT key as-is; the `$fs` name is
+        // `import_name`'s; the alias is a WAT identifier of the harness's own
+        // making, so it keeps the bare method name and stays readable.
+        let (export, import, alias) = match &func.kind {
             FunctionKind::Freestanding => (
                 wit_name.to_string(),
                 wit_name.to_string(),
@@ -638,20 +770,13 @@ impl<'a> Emitter<'a> {
                         "WIT method `{wit_name}` is on a foreign resource; the emitter handles own-interface methods"
                     )));
                 }
-                // Map keys (and `Function.name`) carry the full
-                // `[method]resource.name` form; the `$fs` namespace wants the
-                // short `name`.
-                let short = wit_name
-                    .rsplit('.')
-                    .next()
-                    .ok_or_else(|| {
-                        wasmtime::Error::msg(format!("WIT method name `{wit_name}` has no `.`"))
-                    })?
-                    .to_string();
+                let bare = wit_name.rsplit('.').next().ok_or_else(|| {
+                    wasmtime::Error::msg(format!("WIT method name `{wit_name}` has no `.`"))
+                })?;
                 (
                     wit_name.to_string(),
-                    short.clone(),
-                    format!("{}-{resource_name}-{short}", self.prefix),
+                    import_name(wit_name).to_string(),
+                    format!("{}-{resource_name}-{bare}", self.prefix),
                 )
             }
             _ => {
@@ -692,8 +817,8 @@ impl<'a> Emitter<'a> {
             "  (alias export {} \"{export}\" (func {alias}))",
             self.instance
         ));
-        Ok(FsLower {
-            export: short,
+        Ok(Lower {
+            export: import,
             func: alias,
         })
     }

@@ -158,6 +158,11 @@ pub struct Manifest {
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub dirs: Vec<Dir>,
+    /// `network = true` lets the app open sockets through `wasi:sockets`.
+    /// Nothing is reachable unless it asks, the same rule the directory
+    /// grants follow; `air run --net` is the shell-side equivalent.
+    #[serde(default)]
+    pub network: bool,
     pub app: App,
 }
 
