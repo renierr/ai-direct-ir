@@ -1,0 +1,10 @@
+package ai-direct:sha256@0.1.0;
+
+interface digest {
+  hash: func(data: list<u8>) -> list<u8>;
+  hash-hex: func(data: list<u8>) -> string;
+}
+
+world sha256-provider {
+  export digest;
+}

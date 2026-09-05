@@ -1,0 +1,15 @@
+# A real CLI: `air run examples/sha256sum/host.toml <file>`.
+# `root` is the directory the app may read; paths resolve inside it.
+mode = "command"
+root = "."
+guest = "/work"
+
+# The provider is vendored, not fetched. Its hash is recorded in
+# vendor/ai-direct-sha256-0.1.0/checksums.txt.
+[[providers]]
+path = "vendor/ai-direct-sha256-0.1.0/artifacts/wasm32-wasi/sha256.component.wasm"
+
+[app]
+source = "sha256sum.wat"
+path = "sha256sum.wasm"
+run = "wasi:cli/run"

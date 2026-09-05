@@ -1,0 +1,17 @@
+[package]
+name = "ai-direct:sha256"
+version = "0.1.0"
+description = "SHA-256 digests over the RustCrypto sha2 implementation."
+license = "Apache-2.0 AND (MIT OR Apache-2.0)"
+wit = "wit/sha256.wit"
+
+[[artifacts]]
+kind = "component"
+target = "wasm32-wasi"
+path = "artifacts/wasm32-wasi/sha256.component.wasm"
+sha256 = "fa27d4aeb173e14082fd588c77e55f34ed4f930469622baf3f24f4d528138cc2"
+
+# The adapter is `no_std` with `panic = "abort"`, so the component imports
+# nothing at all: no WASI, no host capability, no ambient authority.
+[requirements]
+wasi = []

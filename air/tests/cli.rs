@@ -889,3 +889,48 @@ fn prompts_cancel_message_is_not_truncated() {
     let printed = stdout(&out);
     assert!(printed.ends_with("Cancelled.\n"), "{printed:?}");
 }
+
+/// The sha256sum example is the end-to-end proof of the provider path: a
+/// vendored component built from an upstream crate, a hand-written
+/// wasi:filesystem import, and guest arguments forwarded by `air run`.
+#[test]
+fn sha256sum_example_matches_a_known_digest() {
+    let _guard = examples_lock();
+    let project = repo().join("examples/sha256sum");
+
+    // "abc" is the FIPS 180-4 vector; the file holds exactly those three bytes.
+    let fixture = project.join("abc.txt");
+    std::fs::write(&fixture, b"abc").expect("write fixture");
+
+    let out = run(&project, &["run", "host.toml", "abc.txt"]);
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  abc.txt\n"
+    );
+
+    let _ = std::fs::remove_file(&fixture);
+}
+
+/// Arguments reach the guest, and the app distinguishes its exit codes.
+#[test]
+fn sha256sum_example_reports_usage_and_errors() {
+    let _guard = examples_lock();
+    let project = repo().join("examples/sha256sum");
+
+    let helped = run(&project, &["run", "host.toml", "--help"]);
+    assert!(helped.status.success(), "{}", stderr(&helped));
+    assert!(stdout(&helped).contains("usage:"), "{}", stdout(&helped));
+
+    // No argument at all: argv reached the guest and it saw only argv[0].
+    let bare = run(&project, &["run", "host.toml"]);
+    assert_eq!(bare.status.code(), Some(1), "{}", stderr(&bare));
+    assert!(
+        stderr(&bare).contains("expected one file"),
+        "{}",
+        stderr(&bare)
+    );
+
+    let missing = run(&project, &["run", "host.toml", "nope.txt"]);
+    assert_eq!(missing.status.code(), Some(2), "{}", stderr(&missing));
+}
