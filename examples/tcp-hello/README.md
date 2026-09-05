@@ -74,14 +74,31 @@ Dropping the socket is what closes the TCP connection, so the drops are load
 bearing rather than tidy: without them the first client never sees end of
 stream and the run leaks a handle per request.
 
-## What still limits it
+## Giving the memory back too
 
-`blocking-read` allocates its `list<u8>` through the boundary's bump
-allocator, which never frees. With the default `heap=0x8000` inside one page
-that is roughly 32KiB for the whole run — a few hundred requests. A server
-meant to stay up needs the real allocator in `docs/PROJECT.md`, not a bigger
-page. One `blocking-read` is also assumed to carry the whole request line,
-which is true of every client here and not true in general.
+Handles are not the only thing a loop owes. `blocking-read` allocates its
+`list<u8>` through the boundary's `cabi_realloc`, which is a bump pointer and
+frees nothing, so this example used to die on request 420:
+
+```
+Caused by: realloc return: beyond end of memory
+```
+
+The heap is one pointer, so the fix is to put it back:
+
+```wat
+(local.set $mark (call $heap_mark))   ;; top of the loop
+...
+(call $heap_reset (local.get $mark))  ;; bottom, after the last read
+```
+
+It now serves 5000 requests and exits 0. The reset comes *after* the `/quit`
+check, because the request bytes it compares are themselves on the heap.
+
+This is not a general allocator — it frees in reverse order or not at all,
+which is exactly a request loop's shape and no use to a long-lived collection.
+One `blocking-read` is also assumed to carry the whole request line, which is
+true of every client here and not true in general.
 
 ## The fifteen-parameter bind
 

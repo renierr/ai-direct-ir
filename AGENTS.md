@@ -120,6 +120,11 @@ Start with `air inspect <file>`.
 - Nothing is reachable unless it asks. `wasi:sockets` is linked for every
   component and answers `access-denied` until `network = true` in the manifest
   or `air run --net` grants it — the same rule as `[[dirs]]` and `--dir`.
+- The generated heap is a bump pointer that frees nothing. A component that
+  loops imports `(import "env" "heap-mark" ...)` / `"heap-reset"`, marks at the
+  top of the iteration and resets at the bottom; without it a request loop
+  dies with `realloc return: beyond end of memory`. It frees in reverse order
+  or not at all — there is no general allocator yet.
 - A resource the boundary declares can be released: import `<resource>.drop`.
   The stream resources come from `"wasi"` (`"input-stream.drop"`), a
   capability's own from its instance (`"tcp-socket.drop"`). It is opt-in like

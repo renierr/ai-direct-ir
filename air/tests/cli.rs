@@ -277,13 +277,24 @@ fn connect(addr: &str) -> std::net::TcpStream {
 /// early -- this waits for the close, which only happens when the component
 /// drops the accepted socket.
 fn request(path: &str) -> String {
+    request_sized(path, 0)
+}
+
+/// The same, padded with a header of `filler` bytes. The component allocates
+/// one `list<u8>` per request out of its bump heap, so the padding is what
+/// decides how fast a loop exhausts it -- see `tcp_hello_outlives_its_bump_heap`.
+fn request_sized(path: &str, filler: usize) -> String {
     let mut socket = connect("127.0.0.1:8125");
     socket
         .set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .expect("set read timeout");
-    socket
-        .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
-        .expect("send request");
+    let padding = "x".repeat(filler);
+    let request = if filler == 0 {
+        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    } else {
+        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Pad: {padding}\r\n\r\n")
+    };
+    socket.write_all(request.as_bytes()).expect("send request");
     let mut response = String::new();
     std::io::Read::read_to_string(&mut socket, &mut response).expect("read response");
     response
@@ -335,6 +346,48 @@ fn tcp_hello_example_serves_connections_until_told_to_stop() {
         stdout(&out).contains("tcp-hello: /quit"),
         "{}",
         stdout(&out)
+    );
+}
+
+/// The bump heap is the other thing a loop has to give back. `blocking-read`
+/// allocates a `list<u8>` per request out of a heap that frees nothing, and
+/// this example died with `realloc return: beyond end of memory` until it took
+/// a mark at the top of the loop and restored it at the bottom.
+///
+/// The default `heap=0x8000` inside one page leaves 32KiB, so the budget is
+/// counted in bytes rather than requests: 400 requests of ~450 bytes each is
+/// 180KiB, five times over. Padding the request is what makes that hold no
+/// matter how terse the bare request line happens to be.
+#[test]
+fn tcp_hello_outlives_its_bump_heap() {
+    let _shared = examples_lock();
+    let repo = repo();
+    let built = run(&repo, &["build", "examples/tcp-hello/host.toml"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+
+    let child = Command::new(air_bin())
+        .args(["run", "examples/tcp-hello/host.toml"])
+        .current_dir(&repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn air");
+
+    for n in 0..400 {
+        let response = request_sized("/", 400);
+        assert!(
+            response.ends_with("hello, air!\n"),
+            "request {n} got: {response}"
+        );
+    }
+    request("/quit");
+
+    let out = child.wait_with_output().expect("wait for air");
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("beyond end of memory"),
+        "{}",
+        stderr(&out)
     );
 }
 

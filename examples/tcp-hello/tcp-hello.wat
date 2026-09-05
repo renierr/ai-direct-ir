@@ -17,10 +17,12 @@
 ;; client only sees end-of-stream because the drop happened. A server that
 ;; skipped it would leave every client hanging and leak a handle per request.
 ;;
-;; The read buffer is the standing limit. `blocking-read` allocates its
-;; `list<u8>` through the boundary's bump allocator, which never frees, so
-;; roughly the 32KiB between `heap=` and the end of the page is the budget for
-;; the whole run. A real server needs the allocator in `docs/PROJECT.md`.
+;; Handles are not the only thing a loop has to give back. `blocking-read`
+;; allocates its `list<u8>` through the boundary's bump heap, which frees
+;; nothing on its own; before `heap-mark`/`heap-reset` this program died after
+;; 420 requests with `realloc return: beyond end of memory`. The mark taken at
+;; the top of the loop and restored at the bottom bounds the whole run to one
+;; connection's allocation.
 ;;
 ;; Memory map (1 page):
 ;;   0x100..0x200 text, packed by `;; @data`
@@ -41,6 +43,12 @@
   ;; --- application logic, ordinary Core WAT -----------------------------
   (core module $main
     (import "env" "memory" (memory 1))
+    ;; The canonical ABI allocates every host-produced value -- here, each
+    ;; request's `list<u8>` -- out of a bump heap that never frees. A mark
+    ;; taken at the top of the loop and restored at the bottom releases the
+    ;; whole iteration at once.
+    (import "env" "heap-mark" (func $heap_mark (result i32)))
+    (import "env" "heap-reset" (func $heap_reset (param i32)))
     (import "wasi" "get-stdout" (func $get_stdout (result i32)))
     (import "wasi" "get-stderr" (func $get_stderr (result i32)))
     (import "wasi" "read" (func $read (param i32 i64 i32)))
@@ -141,6 +149,7 @@
       (local $in i32)
       (local $out i32)
       (local $len i32)
+      (local $mark i32)
 
       (local.set $net (call $network))
 
@@ -185,6 +194,9 @@
 
       (block $stop
         (loop $serve
+          ;; Everything the host allocates for this connection lives above
+          ;; here and dies at the bottom of the loop.
+          (local.set $mark (call $heap_mark))
           (call $block (local.get $poll))
 
           ;; accept -> result<tuple<own<tcp-socket>, own<input-stream>,
@@ -217,10 +229,13 @@
           (call $drop_in (local.get $in))
           (call $drop_socket (local.get $conn))
 
+          ;; The request bytes are still on the heap, so the reset comes
+          ;; after the last read of them.
           (br_if $stop
             (call $starts_with
               (i32.load (i32.const 0x284)) (local.get $len)
               (global.get $quit.ptr) (global.get $quit.len)))
+          (call $heap_reset (local.get $mark))
           (br $serve)))
 
       (call $print (global.get $bye.ptr) (global.get $bye.len))

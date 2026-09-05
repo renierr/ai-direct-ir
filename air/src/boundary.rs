@@ -119,6 +119,11 @@ impl Boundary {
 /// one is aliased to. A resource the boundary declares can be released:
 /// `(import "wasi" "input-stream.drop" ...)` puts `resource.drop` on it, the
 /// same rule and the same spelling the generated capabilities follow.
+/// The bump heap's controls, beyond `memory` and `cabi_realloc`. `$mem-mod`
+/// exports exactly these four names, which is what lets an unknown `"env"`
+/// import be a build error rather than an unresolved core import.
+const HEAP_CONTROLS: [&str; 2] = ["heap-mark", "heap-reset"];
+
 const STREAM_RESOURCES: [(&str, &str); 3] = [
     ("error", "$error"),
     ("input-stream", "$istream"),
@@ -220,7 +225,7 @@ pub fn emit(boundary: &Boundary, imports: &Imports) -> Result<String> {
     for (_, generated) in derived.iter().flatten() {
         out.push_str(&generated.wat);
     }
-    emit_memory(boundary, &mut out);
+    emit_memory(boundary, &heap_controls(imports)?, &mut out);
     emit_lowering(
         boundary,
         &stream_drops(boundary, imports)?,
@@ -228,6 +233,37 @@ pub fn emit(boundary: &Boundary, imports: &Imports) -> Result<String> {
         &mut out,
     );
     Ok(out)
+}
+
+/// Which bump-heap controls the application imported from `"env"`.
+///
+/// `cabi_realloc` hands out host-produced values and never takes them back, so
+/// a component that loops runs out of page: `examples/tcp-hello/` died after
+/// 420 requests with `realloc return: beyond end of memory`. The heap is one
+/// pointer, so releasing an iteration's allocations is putting it back --
+/// `heap-mark` reads it, `heap-reset` restores it. That is the whole allocator
+/// a request loop needs, and it is opt-in like everything else here, so a
+/// program with an end gets the `$mem-mod` it always got.
+///
+/// `"env"` carries the memory import too, and `$mem-mod` exports a closed set,
+/// so a name outside it is a typo worth naming at the directive.
+fn heap_controls(imports: &Imports) -> Result<Vec<&'static str>> {
+    let used = imports.get("env").cloned().unwrap_or_default();
+    for name in &used {
+        let known = matches!(name.as_str(), "memory" | "cabi_realloc")
+            || HEAP_CONTROLS.contains(&name.as_str());
+        if !known {
+            return Err(wasmtime::Error::msg(format!(
+                "`(import \"env\" \"{name}\" ...)` names nothing the generated \
+                 memory exports; `$mem` has `memory`, `cabi_realloc`, \
+                 `heap-mark` and `heap-reset`"
+            )));
+        }
+    }
+    Ok(HEAP_CONTROLS
+        .into_iter()
+        .filter(|control| used.contains(*control))
+        .collect())
 }
 
 /// The stream resources the application asked to be able to release, in
@@ -416,13 +452,14 @@ fn emit_cli(boundary: &Boundary, out: &mut String) {
 /// The shared memory module. Lowering an import needs the memory and the
 /// application module needs the lowered imports, so the memory lives in a
 /// module of its own to break that cycle.
-fn emit_memory(boundary: &Boundary, out: &mut String) {
+fn emit_memory(boundary: &Boundary, controls: &[&str], out: &mut String) {
     out.push_str(&format!(
         "  (core module $mem-mod\n\
          \x20   (memory (export \"memory\") {pages})\n\
          \x20   (global $bump (mut i32) (i32.const {heap:#x}))\n\
          \x20   ;; The canonical ABI allocates host-produced values here. A bump\n\
-         \x20   ;; allocator is enough: a component built this way never frees.\n\
+         \x20   ;; allocator is enough for a run with an end; a program that\n\
+         \x20   ;; loops asks for `heap-mark` and `heap-reset` below.\n\
          \x20   (func (export \"cabi_realloc\")\n\
          \x20     (param $old i32) (param $old_size i32) (param $align i32) (param $new i32)\n\
          \x20     (result i32)\n\
@@ -432,13 +469,34 @@ fn emit_memory(boundary: &Boundary, out: &mut String) {
          \x20                (i32.xor (i32.sub (local.get $align) (i32.const 1)) (i32.const -1))))\n\
          \x20     (local.set $ptr (global.get $bump))\n\
          \x20     (global.set $bump (i32.add (global.get $bump) (local.get $new)))\n\
-         \x20     (local.get $ptr)))\n\
-         \x20 (core instance $mem (instantiate $mem-mod))\n\
-         \x20 (alias core export $mem \"memory\" (core memory $memory))\n\
-         \x20 (alias core export $mem \"cabi_realloc\" (core func $realloc))\n\n",
+         \x20     (local.get $ptr))\n",
         pages = boundary.pages,
         heap = boundary.heap,
     ));
+    if !controls.is_empty() {
+        out.push_str(
+            "    ;; The heap is one pointer, so releasing a whole iteration's\n\
+             \x20   ;; allocations is putting it back. `heap-reset` takes a mark\n\
+             \x20   ;; from `heap-mark` and nothing else: it is a bump pointer,\n\
+             \x20   ;; not an allocator, and it frees in the reverse of the\n\
+             \x20   ;; order it allocated or not at all.\n",
+        );
+    }
+    for control in controls {
+        out.push_str(match *control {
+            "heap-mark" => "    (func (export \"heap-mark\") (result i32) (global.get $bump))\n",
+            _ => {
+                "    (func (export \"heap-reset\") (param $mark i32)\n\
+                  \x20     (global.set $bump (local.get $mark)))\n"
+            }
+        });
+    }
+    out.push_str(
+        "    )\n\
+         \x20 (core instance $mem (instantiate $mem-mod))\n\
+         \x20 (alias core export $mem \"memory\" (core memory $memory))\n\
+         \x20 (alias core export $mem \"cabi_realloc\" (core func $realloc))\n\n",
+    );
 }
 
 /// Lower each import into a Core function and gather them into `$wasi` — and,
@@ -816,6 +874,50 @@ mod tests {
         ] {
             assert!(!text.contains(unwanted), "{unwanted} leaked into:\n{text}");
         }
+    }
+
+    /// The bump heap frees nothing on its own, so a component that loops runs
+    /// out of page. The controls are opt-in like every other generated name: a
+    /// program with an end gets the `$mem-mod` it always got.
+    #[test]
+    fn the_heap_controls_are_opt_in() {
+        // The comment in `$mem-mod` points at them either way; the exports
+        // are what an unasked-for control would cost.
+        let plain = wat("stdout");
+        assert!(!plain.contains("(export \"heap-mark\")"), "{plain}");
+        assert!(!plain.contains("(export \"heap-reset\")"), "{plain}");
+
+        let looping =
+            try_wat_all("stdout", &[("env", &["memory", "heap-mark", "heap-reset"])]).unwrap();
+        assert!(
+            looping.contains("(func (export \"heap-mark\") (result i32) (global.get $bump))"),
+            "{looping}"
+        );
+        assert!(
+            looping.contains("(global.set $bump (local.get $mark))"),
+            "{looping}"
+        );
+
+        // Each is asked for on its own, like every other name here.
+        let read_only = try_wat_all("stdout", &[("env", &["memory", "heap-mark"])]).unwrap();
+        assert!(read_only.contains("(export \"heap-mark\")"), "{read_only}");
+        assert!(
+            !read_only.contains("(export \"heap-reset\")"),
+            "{read_only}"
+        );
+    }
+
+    /// `$mem-mod` exports a closed set, so a misspelled control is a typo the
+    /// build can name rather than an unresolved core import.
+    #[test]
+    fn an_unknown_env_import_is_an_error() {
+        let message = try_wat_all("stdout", &[("env", &["memory", "heap-marc"])])
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("heap-marc"), "{message}");
+        assert!(message.contains("cabi_realloc"), "{message}");
+        // The memory import every application writes is not a typo.
+        assert!(try_wat_all("stdout", &[("env", &["memory"])]).is_ok());
     }
 
     /// A handle is the one thing the canonical ABI cannot release for the

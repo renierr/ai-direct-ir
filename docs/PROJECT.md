@@ -194,7 +194,7 @@ rely on them:
 
 | Name | What it is |
 | --- | --- |
-| `$mem` | core instance exporting `memory` — `(with "env" (instance $mem))` |
+| `$mem` | core instance exporting `memory`, and on request `heap-mark` / `heap-reset` — `(with "env" (instance $mem))` |
 | `$wasi` | core instance of lowered imports — `(with "wasi" (instance $wasi))` |
 | `$memory` / `$realloc` | the memory and its bump allocator, for lowering further imports |
 | `$fs` | core instance of lowered `wasi:filesystem` imports — `(with "fs" (instance $fs))`, names such as `"descriptor.open-at"` and `"get-directories"` |
@@ -326,6 +326,45 @@ never sees end of stream and the loop leaks a handle per request. Its artifact
 went from 5859 to 6567 bytes for the accept loop, the `/quit` check, and the
 three drops.
 
+#### Releasing memory
+
+Handles were not the only thing a loop had to give back. The boundary's
+`cabi_realloc` is a bump pointer: the canonical ABI allocates every
+host-produced value through it — a read buffer, an argument list — and nothing
+ever frees. That is right for a run with an end, and wrong for the accept loop
+the previous section just made possible. Hammered with `curl`,
+`examples/tcp-hello/` died on request 420:
+
+```
+Caused by: realloc return: beyond end of memory
+```
+
+The heap is one pointer, so releasing an iteration's allocations is putting it
+back. `$mem` gained two exports for it:
+
+```wat
+(import "env" "heap-mark" (func $heap_mark (result i32)))
+(import "env" "heap-reset" (func $heap_reset (param i32)))
+```
+
+Mark at the top of the loop, reset at the bottom, and the whole run costs one
+connection's allocation. The same example now serves 5000 requests and exits 0.
+
+This is deliberately not an allocator. It frees in the reverse of the order it
+allocated or not at all, which is exactly the shape a request loop has and no
+help at all to a long-lived collection — that is still Next Work item 2, and
+still waiting on an application that states the requirement. What it does buy
+is that "a component that stays up" stopped being blocked on a design nobody
+has the inputs for yet.
+
+Both controls are opt-in by import, like every other generated name, so no
+artifact grew: rebuilding all nine examples changed only `tcp-hello.wasm`.
+`$mem-mod` exports a closed set of four names, which is what lets a misspelled
+`"env"` import be a build error naming the line rather than an unresolved core
+import. The reset takes a mark from `heap-mark` and nothing else — it is not
+validated, because a guest can already write anywhere in its own memory, and a
+clamp would trade one corruption for another rather than catching the bug.
+
 Converting the four component sources removed 208 lines and changed no
 behavior:
 
@@ -400,6 +439,15 @@ a drop alone declares its resource without dragging in the interface's other
 types, and that a drop for an undeclared resource is an error. Rebuilding every
 example afterwards changed only `tcp-hello.wasm`.
 
+The bump heap was measured the same way. `examples/tcp-hello/` died on request
+420 with `realloc return: beyond end of memory`; with `heap-mark`/`heap-reset`
+it serves 5000 and exits 0. `air/tests/cli.rs` pins that as 400 requests padded
+to ~450 bytes each — 180KiB against a 32KiB heap, so the assertion is in bytes
+rather than in a request count that a terser request line would slip under. The
+test was checked against its own regression: with the reset commented out it
+fails on request 73. Unit tests pin that both controls are opt-in and that an
+unknown `"env"` import is an error.
+
 Fresh native, browser, and GUI scaffolds have completed their applicable
 `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
@@ -414,12 +462,11 @@ rebuild.
   provider boundary.
 - `ui.*` is not available to components: its signatures pass raw pointers and
   need value-based replacements first.
-- A long-running component still has no allocator. The boundary's `cabi_realloc`
-  is a bump allocator that never frees, so every host-produced value — a read
-  buffer, an argument list — is permanent. `examples/tcp-hello/` accepts in a
-  loop and releases its handles, but each request's `blocking-read` costs heap
-  it never gets back: roughly 32KiB for the whole run at the default `heap=`.
-  See Next Work item 2.
+- The heap frees in one order or not at all. `heap-mark`/`heap-reset` release a
+  whole iteration at once, which is what a request loop needs and nothing a
+  long-lived collection can use. There is still no general allocator and no
+  growth past the `pages=` the directive asks for. See Releasing Memory and
+  Next Work item 2.
 - `mode = "server"` and the `net.*` host syscalls are now redundant for
   components, which bind their own sockets through `wasi:sockets`. They remain
   because `examples/server/` is a Core app that links `libs/http/http.wasm`,
@@ -791,11 +838,13 @@ being specification-only before more specification is written.
     file rather than a vendored constant, and the emitter has never been
     pointed at one. See The Boundary From WIT and What Actually Needs A Harness
     Change.
-2. Continue up the memory ladder: records with named fields, then an
-   allocator. Segment addresses are handled (see Harness-Placed Segments), but
-   an application with dynamic collections needs both, and neither should be
-   designed before a real application states its requirements. Grow the mail
-   example far enough to state them.
+2. Continue up the memory ladder: records with named fields, then a real
+   allocator. Segment addresses are handled (see Harness-Placed Segments) and
+   a request loop can now release a whole iteration at once (see Releasing
+   Memory), which is as far as a bump pointer goes. Freeing in arbitrary order,
+   and growing past one page, still wait on an application that states the
+   requirement — a long-lived collection rather than a per-request buffer.
+   Grow the mail example far enough to state it.
 3. Give `ui.*` value-based signatures so components can import it, then
    convert `gui-hello`. `term.*` already made the trip as
    `ai-direct:host/term`; `net.*` needs no trip, because a component reaches
