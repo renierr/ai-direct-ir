@@ -388,6 +388,58 @@ their Core signatures pass pointers into guest memory, which has no meaning
 across a component boundary. They need value-based signatures (`string`,
 `list<u8>`) first. That is a redesign, not a blocker.
 
+### What Actually Needs A Harness Change
+
+`;; @wasi` names a handful of interfaces, so it is fair to ask whether every new
+capability means new harness code -- which would make `air` a bottleneck rather
+than a runtime. It does not. Three categories, and only one of them is the
+harness's:
+
+**Interfaces WASI already defines: no harness change.** `air` links the whole
+WASI 0.2 set through `p2::add_to_linker_sync` -- cli, io, filesystem, sockets,
+clocks, random. An application reaches any of them by declaring the import in
+its own WAT. `examples/sha256sum/` reads files through hand-written
+`wasi:filesystem` imports, including the 37-case `error-code` enum, and not one
+line of `air` knows the word "filesystem". The `;; @wasi` directive is a
+shorthand for the boundary most programs need, never a gate on the ones they do
+not.
+
+**Host policy: genuinely the harness's job.** Whether argv reaches the guest,
+which directories are preopened, whether a clock is real or frozen -- WASI
+defines the interface but not the answer. Forwarding `air run <manifest>
+<args...>` to the guest is a decision, and making decisions about the outside
+world is what a runtime is for. Every runtime has this surface; `wasmtime` calls
+it `--dir` and argv passing. It is small and it closes.
+
+**The project's own ABIs.** `ai-direct:host/term`, `[[providers]]`,
+`[[bridges]]`. These extend the harness once so every application benefits,
+which is the stated point of the repository.
+
+So the shorthand is the only thing that grows per interface, and the fix for
+that is already visible: generate the boundary from the interface's own WIT --
+which ships with Wasmtime and is what `examples/sha256sum/`'s enum was
+transcribed from -- instead of hardcoding capability words. That would end the
+category entirely. Until an application needs it, hand-writing a rare import is
+a declaration an author makes once.
+
+### Consuming Someone Else's Compiled Work
+
+`ai-direct:sha256` is the catalog's first package and the first proof that the
+premise reaches past hand-written IR. The cryptography is RustCrypto's `sha2`,
+used unmodified; the package adds a WIT contract, a `no_std` adapter, a
+reproducible build, and a conformance test against coreutils `sha256sum`.
+
+`wit-bindgen` is not required and was not installed. It generates canonical ABI
+glue, and an adapter that exports that shape directly is enough for
+`wasm-tools component embed` and `component new` to lift a core module into a
+component. The released artifact imports nothing at all -- no WASI, no ambient
+authority -- so it is a pure function of its input and trivial to audit.
+
+`examples/sha256sum/` vendors it hash-locked and consumes it through
+`[[providers]]`, so the whole chain is proved by execution: upstream crate ->
+component -> vendored package -> application -> a digest that matches
+`sha256sum` byte for byte.
+
 ## Why WASI And The Component Model
 
 A `.wasm` module is pure computation. It cannot read a file, open a socket, or
@@ -442,11 +494,11 @@ compatibility layer.
 Ordered so that each step is provable on its own, and so the catalog stops
 being specification-only before more specification is written.
 
-1. Build the first provider package in `ai-direct-ir-providers`: SHA-256 with
-   WIT, provenance, license notice, component artifact, hash, and a conformance
-   test. It can be hand-authored the way `examples/provider-demo/` is, so no
-   Rust component toolchain is needed; `libs/sha256/` stays the reference to
-   check the result against. Runtime provider linking already consumes it.
+1. Generate the boundary from an interface's own WIT instead of hardcoding
+   capability words in `;; @wasi`. The WIT ships with Wasmtime, and
+   `examples/sha256sum/` shows what hand-transcribing one costs: a 37-case enum
+   and three flags types. This is the step that stops the shorthand from
+   growing per interface. See What Actually Needs A Harness Change.
 2. Continue up the memory ladder: records with named fields, then an
    allocator. Segment addresses are handled (see Harness-Placed Segments), but
    an application with dynamic collections needs both, and neither should be

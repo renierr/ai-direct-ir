@@ -48,8 +48,8 @@ lowering:
   ;; @wasi stdin stdout stderr exit pages=2 heap=0x8000
 ```
 
-Capabilities are `stdin`, `stdout`, `stderr`, `exit`, `exit-with-code`;
-`pages=` (default 1) and
+Capabilities are `stdin`, `stdout`, `stderr`, `exit`, `exit-with-code`,
+`args`; `pages=` (default 1) and
 `heap=` (default `0x8000`, the canonical ABI bump base) are optional. An
 unknown word is an error, not a silent omission. The generated names are the
 boundary ABI:
@@ -61,8 +61,15 @@ boundary ABI:
 | `$memory` / `$realloc` | the memory and its bump allocator, for lowering your own imports |
 
 `$wasi` exports one Core function per capability: `get-stdin`, `read`,
-`get-stdout`, `get-stderr`, `write`, `exit`. Write the program against those in
+`get-stdout`, `get-stderr`, `write`, `exit`,
+`exit-with-code`, `get-arguments`. Write the program against those in
 an ordinary `(core module $main ...)`.
+
+**An interface the directive does not name is still available.** `air` links
+the whole WASI 0.2 set, so declare the import by hand and lower it with the
+generated `$memory` / `$realloc`. `examples/sha256sum/` in the harness
+repository does this for `wasi:filesystem`. The directive is a shorthand for
+the common boundary, not a gate.
 
 **Lift the entry point.** `run: func() -> result` — `0` is exit 0, `1` is a
 failed run:

@@ -91,6 +91,13 @@ Start with `air inspect <file>`.
   program against the `$wasi` and `$mem` core instances it defines.
 - `exit` takes a `result`: 0 or 1, nothing else, so it says only whether the
   run failed. For a POSIX-style status ask for `exit-with-code` (`u8`).
+  `args` imports `wasi:cli/environment`; `air run <manifest> <args...>`
+  forwards everything after the manifest, with argv[0] the app name.
+- A WASI interface `;; @wasi` does not name is still available: declare the
+  import by hand. `air` links the whole WASI 0.2 set, so the directive is a
+  shorthand for the common boundary, never a gate. See `examples/sha256sum/`.
+- Canonical ABI discriminants are `u8`. Read them with `i32.load8_u`; an
+  `i32.load` takes three bytes of undefined padding along with the tag.
 - A component consumes another component through `[[providers]]`, wired at link
   time. No composition tool is involved.
 - Commit messages: short imperative summary.
