@@ -69,11 +69,19 @@ fn main() -> Result<()> {
             }
             cmds::cmd_new(&engine, arg1)
         }
-        "run" => cmds::run_manifest(&engine, if arg1.is_empty() { "host.toml" } else { arg1 }),
+        // Everything after the manifest belongs to the guest, not to `air`.
+        "run" => {
+            let (path, rest) = if arg1.is_empty() {
+                ("host.toml", &args[1..])
+            } else {
+                (arg1, &args[2..])
+            };
+            cmds::run_manifest(&engine, path, rest)
+        }
         other => {
             // Shorthand: a .toml path means `run`.
             if other.ends_with(".toml") {
-                cmds::run_manifest(&engine, other)
+                cmds::run_manifest(&engine, other, &args[1..])
             } else {
                 cmds::print_help();
                 Err(wasmtime::Error::msg(format!("unknown command `{other}`")))

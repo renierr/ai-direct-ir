@@ -61,7 +61,12 @@ pub struct Linked {
 /// Load, link, and instantiate a component, stopping before execution.
 /// Instantiation is what proves every WASI import the component declares is
 /// actually satisfied, exactly as the Core path relies on it.
-pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Linked> {
+pub fn link_all(
+    engine: &Engine,
+    manifest: &Manifest,
+    base: &Path,
+    guest_args: &[String],
+) -> Result<Linked> {
     if !manifest.libs.is_empty() || !manifest.bridges.is_empty() {
         return Err(wasmtime::Error::msg(
             "a component app cannot declare [[libs]] or [[bridges]]: those are Core WASM \
@@ -81,6 +86,17 @@ pub fn link_all(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<Lin
 
     let mut builder = WasiCtxBuilder::new();
     builder.inherit_stdio();
+    // argv[0] is the program name by convention, so a guest's usage message can
+    // name itself. Whether argv reaches the guest at all is the host's call, not
+    // something WASI decides -- this is the line that makes it so.
+    let mut argv = vec![
+        Path::new(&manifest.app.path)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "app".into()),
+    ];
+    argv.extend(guest_args.iter().cloned());
+    builder.args(&argv);
     if let Some(root) = &manifest.root {
         let guest = manifest.guest.clone().unwrap_or_else(|| {
             Path::new(root)
@@ -283,7 +299,8 @@ fn entry_of(engine: &Engine, component: &Component, run: &str) -> Result<Entry> 
 
 /// Validate a component without executing it.
 pub fn check(engine: &Engine, manifest_path: &str, manifest: &Manifest, base: &Path) -> Result<()> {
-    let mut linked = link_all(engine, manifest, base)?;
+    // A check never runs the guest, so it needs no guest arguments.
+    let mut linked = link_all(engine, manifest, base, &[])?;
     let described = match &linked.entry {
         Entry::Command { instance } => format!("run `{instance}`: command entry ok"),
         Entry::Function { name } => format!("run `{name}`: signature ok"),
@@ -299,8 +316,8 @@ pub fn check(engine: &Engine, manifest_path: &str, manifest: &Manifest, base: &P
 
 /// Execute a component. A command entry's `Err` result is a failed run, which
 /// the process reports as a non-zero exit exactly like a Core `proc_exit`.
-pub fn run(engine: &Engine, manifest: &Manifest, base: &Path) -> Result<()> {
-    let mut linked = link_all(engine, manifest, base)?;
+pub fn run(engine: &Engine, manifest: &Manifest, base: &Path, guest_args: &[String]) -> Result<()> {
+    let mut linked = link_all(engine, manifest, base, guest_args)?;
     let outcome = match &linked.entry {
         Entry::Command { .. } => command_func(&mut linked).and_then(|func| {
             let (result,) = exit_aware(func.call(&mut linked.store, ()))?;

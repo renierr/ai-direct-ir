@@ -150,7 +150,7 @@ fn manifest_base(manifest_path: &str) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
+pub fn run_manifest(engine: &Engine, path: &str, guest_args: &[String]) -> Result<()> {
     let manifest: Manifest = crate::manifest::load(path)?;
     build_if_needed(engine, path, &manifest)?;
     if manifest.target == Target::Browser {
@@ -162,7 +162,7 @@ pub fn run_manifest(engine: &Engine, path: &str) -> Result<()> {
         return crate::gui::run(engine.clone(), manifest, manifest_base(path));
     }
     if manifest.target == Target::Component {
-        return crate::component::run(engine, &manifest, &manifest_base(path));
+        return crate::component::run(engine, &manifest, &manifest_base(path), guest_args);
     }
     let base = manifest_base(path);
     if manifest.worker_count() > 1 {
