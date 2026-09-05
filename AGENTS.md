@@ -45,7 +45,11 @@ generic design changes.
 
 ## Layout
 
-- `air/src/` — `main.rs` (CLI) + `manifest`/`host`/`net`/`link`/`cmds`
+- `air/src/` — `main.rs` (CLI) + `manifest`/`host`/`net`/`link`,
+  `cmds/` (one file per subcommand) and `asm/` (the WAT assembler:
+  `source` expands, `scan` reads, `data` places segments, `diag` maps a
+  failure back to the authored line). `boundary`/`wit` generate the
+  WASI boundary `asm/source` expands.
 - `air/tests/cli.rs` — end-to-end tests that drive the real binary
 - `examples/<name>/` — `<name>.wat` + tracked `<name>.wasm` + `host.toml`;
   every manifest declares `source`, so the artifact is rebuilt from the WAT

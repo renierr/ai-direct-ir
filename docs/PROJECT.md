@@ -590,7 +590,7 @@ What the pinned toolchain actually offers, as of `wasmtime 48.0.1`:
 - p3 ships no `add_to_linker_sync`. It is async by construction, while `air` is
   synchronous throughout (`p2::add_to_linker_sync` and `Linker::instantiate` in
   `component.rs`, `p1::add_to_linker_sync` in `link.rs`). Adopting p3 means an
-  async runtime inside the harness and async plumbing through `cmds.rs`,
+  async runtime inside the harness and async plumbing through `cmds/`,
   `net.rs`, and the eframe path.
 
 By contrast `p2` is a default feature, its implementation carries no such

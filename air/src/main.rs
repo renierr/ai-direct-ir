@@ -1,5 +1,6 @@
 //! air: link + host configured WASM apps. See docs/PROJECT.md.
 
+mod asm;
 mod boundary;
 mod cmds;
 mod component;
@@ -12,6 +13,12 @@ mod term;
 mod wit;
 
 use wasmtime::{Engine, Result};
+
+/// The crate's shorthand for "stop with this message". Every subcommand and
+/// every assembler stage reports failure the same way.
+fn fail<T>(msg: String) -> Result<T> {
+    Err(wasmtime::Error::msg(msg))
+}
 
 /// Read leading host options off `run`. Everything from the first
 /// non-option word on is the manifest and then the guest's own arguments, so
