@@ -7,11 +7,13 @@
 //! so `air` parses it with `wit-parser` and emits the same WAT an author
 //! could have written.
 //!
-//! Scope is deliberately one capability: `wasi:filesystem`, the interface the
-//! repository actually consumes. The emitter itself is generic over the WIT
-//! type system (resources, records, variants, enums, flags, tuples, options,
-//! results, lists, borrows, owns); teaching `;; @wasi` a new interface is
-//! vendoring its WIT and wiring one more entry point, not transcribing it.
+//! The emitter is generic over the WIT type system (resources, records,
+//! variants, enums, flags, tuples, options, results, lists, borrows, owns),
+//! so teaching `;; @wasi` a new interface is vendoring its WIT and wiring one
+//! more `Capability`, not transcribing it. `wasi:filesystem`, `wasi:sockets`
+//! and the harness's own `ai-direct:host` all arrive that way -- nothing here
+//! is WASI-specific, and `ai-direct-host/host.wit` is not vendored at all:
+//! `air` implements it, so that file is the contract for both sides.
 //!
 //! The WIT declares 29 filesystem functions and the whole type graph behind
 //! them. An application names the handful it calls, as `(import "fs" "...")`
@@ -43,6 +45,10 @@ const IO_WIT: &str = include_str!("../wit/wasi-0.2.12/io.wit");
 const CLOCKS_WIT: &str = include_str!("../wit/wasi-0.2.12/clocks.wit");
 const FILESYSTEM_WIT: &str = include_str!("../wit/wasi-0.2.12/filesystem.wit");
 const SOCKETS_WIT: &str = include_str!("../wit/wasi-0.2.12/sockets.wit");
+/// The harness's own interfaces. Not vendored: `air` implements this one, so
+/// the file is the source of truth for `component.rs` and for the guest
+/// imports generated here.
+const HOST_WIT: &str = include_str!("../wit/ai-direct-host/host.wit");
 
 /// One entry of a capability's core instance: the name the application imports
 /// (see `import_name`), the Core function it is, and the `canon` definition
@@ -172,6 +178,35 @@ pub const SOCKETS: Capability = Capability {
             functions: true,
         },
     ],
+};
+
+/// `;; @wasi term`. The harness's own terminal, in the same generated shape as
+/// a WASI capability: `air` implements `ai-direct:host/term` in
+/// `component.rs`, and this makes the guest side of it derived rather than
+/// transcribed. The interface reaches no other package, so it stands alone.
+pub const TERM: Capability = Capability {
+    instance: "term",
+    prefix: "$term",
+    package: "ai-direct:host",
+    source: "air/wit/ai-direct-host/host.wit",
+    interfaces: &[Interface {
+        wit: "ai-direct:host/term",
+        var: "i",
+        functions: true,
+    }],
+};
+
+/// `;; @wasi ui`. The immediate-mode UI a `mode = "gui"` component draws with.
+pub const UI: Capability = Capability {
+    instance: "ui",
+    prefix: "$ui",
+    package: "ai-direct:host",
+    source: "air/wit/ai-direct-host/host.wit",
+    interfaces: &[Interface {
+        wit: "ai-direct:host/ui",
+        var: "i",
+        functions: true,
+    }],
 };
 
 /// Parse the vendored WASI WIT and emit `capability`'s boundary for the names
@@ -314,6 +349,7 @@ fn resolve() -> wasmtime::Result<Resolve> {
         ("wasi-0.2.12/clocks.wit", CLOCKS_WIT),
         ("wasi-0.2.12/filesystem.wit", FILESYSTEM_WIT),
         ("wasi-0.2.12/sockets.wit", SOCKETS_WIT),
+        ("ai-direct-host/host.wit", HOST_WIT),
     ] {
         resolve.push_source(path, contents).map_err(|error| {
             wasmtime::Error::msg(format!("invalid vendored WIT `{path}`: {error:#}"))

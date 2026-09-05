@@ -50,12 +50,16 @@ change.
 
 ## The generated boundary
 
-- `filesystem` and `sockets` derive their extent from the application's own
-  `(import "fs" ...)` / `(import "net" ...)` lines. An unknown name, or a
-  capability with no import at all, fails the build.
+- `filesystem`, `sockets`, `term` and `ui` derive their extent from the
+  application's own `(import "fs" ...)` / `(import "net" ...)` / `(import
+  "term" ...)` / `(import "ui" ...)` lines. An unknown name, or a capability
+  with no import at all, fails the build.
 - An import name is the WIT export key minus its bracketed kind:
   `descriptor.open-at`, `tcp-socket.subscribe`. A new interface is a table
-  entry in `air/src/wit.rs`, never a transcribed type graph.
+  entry in `air/src/wit.rs`, never a transcribed type graph. The harness's own
+  interfaces are in `air/wit/ai-direct-host/host.wit` — the one WIT file here
+  that is not vendored, and the contract `component.rs` implements. Change
+  both sides in that one file.
 - Release handles with `<resource>.drop`: stream resources from `"wasi"`, a
   capability's own from its instance. Opt-in, and dropping something the
   boundary never declared fails the build.

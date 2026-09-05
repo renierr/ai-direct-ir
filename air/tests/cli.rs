@@ -854,19 +854,7 @@ fn component_scaffold_builds_checks_and_runs() {
 fn ui_caller(text: &str) -> String {
     format!(
         r#"(component
-  ;; @wasi stdout
-  (import "ai-direct:host/ui" (instance $ui
-    (export "label" (func (param "text" string)))
-    (export "button" (func (param "text" string) (result bool)))))
-  (alias export $ui "label" (func $label))
-  (alias export $ui "button" (func $button))
-  (core func $label-l
-    (canon lower (func $label) (memory $memory) (realloc $realloc)))
-  (core func $button-l
-    (canon lower (func $button) (memory $memory) (realloc $realloc)))
-  (core instance $host-ui
-    (export "label" (func $label-l))
-    (export "button" (func $button-l)))
+  ;; @wasi stdout ui
   (core module $main
     (import "env" "memory" (memory 1))
     (import "wasi" "get-stdout" (func $get_stdout (result i32)))
@@ -888,7 +876,7 @@ fn ui_caller(text: &str) -> String {
   (core instance $app (instantiate $main
     (with "env" (instance $mem))
     (with "wasi" (instance $wasi))
-    (with "ui" (instance $host-ui))))
+    (with "ui" (instance $ui))))
   (func $run (result (result)) (canon lift (core func $app "run")))
   (instance $run-i (export "run" (func $run)))
   (export "wasi:cli/run@0.2.12" (instance $run-i))
@@ -1153,6 +1141,103 @@ fn component_distribution_bundles_the_host() {
     assert!(manifest.contains("component"), "{manifest}");
 }
 
+/// The harness's own interfaces are generated from WIT like a WASI one.
+/// `air/wit/ai-direct-host/host.wit` is the file `component.rs` implements, so
+/// `;; @wasi term` cannot describe a signature the host does not offer -- the
+/// 34 hand-written lines this replaces in `examples/prompts-raw` could.
+#[test]
+fn the_term_capability_is_generated_from_wit() {
+    let project = scaffold_target("term-generated", "component");
+    write_app(&project, &term_caller());
+    let checked = run(&project, &["check"]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    // Same answer as the hand-declared boundary below: tests have no terminal.
+    assert_eq!(stdout(&ran), "terminal: no\n");
+}
+
+/// A name the WIT does not declare is an error at the directive, not an
+/// unresolved import discovered inside the component linker.
+#[test]
+fn the_term_capability_rejects_a_name_it_does_not_declare() {
+    let project = scaffold_target("term-unknown", "component");
+    write_app(
+        &project,
+        &term_caller().replace(
+            r#"(import "term" "available" (func $available (result i32)))"#,
+            r#"(import "term" "available" (func $available (result i32)))
+    (import "term" "resize" (func $resize (param i32 i32)))"#,
+        ),
+    );
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "{}", stdout(&built));
+    let message = stderr(&built);
+    assert!(message.contains("\"resize\""), "{message}");
+    assert!(message.contains("ai-direct:host"), "{message}");
+}
+
+/// `ui` and `term` are one WIT package, so asking for one must not drag in the
+/// other: a component that draws imports no terminal.
+#[test]
+fn one_host_capability_does_not_import_the_other() {
+    let project = scaffold_target("host-one", "component");
+    write_app(&project, &ui_caller("hi"));
+    assert!(run(&project, &["build"]).status.success());
+    let bytes = std::fs::read(project.join("app.wasm")).expect("read artifact");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("ai-direct:host/ui"), "ui must be imported");
+    assert!(
+        !text.contains("ai-direct:host/term"),
+        "a drawing component imported the terminal"
+    );
+}
+
+/// A component that asks for a capability and imports nothing from it is a
+/// stale directive, and saying so beats emitting an instance nothing uses.
+#[test]
+fn a_host_capability_with_no_imports_is_an_error() {
+    let project = scaffold_target("term-unused", "component");
+    set_wasi_directive(&project, "stdout term");
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "{}", stdout(&built));
+    assert!(stderr(&built).contains("\"term\""), "{}", stderr(&built));
+}
+
+/// Reads `available` through the generated `$term` instance and reports it.
+fn term_caller() -> String {
+    r#"(component
+  ;; @wasi stdout term
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    ;; `available` answers a `bool`, which lowers to an `i32` that is 0 or 1.
+    (import "term" "available" (func $available (result i32)))
+    (data $no (i32.const 0x100) "terminal: no\n")
+    (data $yes (i32.const 0x120) "terminal: yes\n")
+    (func (export "run") (result i32)
+      (if (call $available)
+        (then (call $write (call $get_stdout)
+                (global.get $yes.ptr) (global.get $yes.len) (i32.const 0x200)))
+        (else (call $write (call $get_stdout)
+                (global.get $no.ptr) (global.get $no.len) (i32.const 0x200))))
+      (i32.load (i32.const 0x200))))
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))
+    (with "term" (instance $term))))
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
+)
+"#
+    .to_string()
+}
+
+/// The directive is a shorthand, never a gate: the same interface declared by
+/// hand still links, which is what a component consuming an interface `air`
+/// does *not* implement has to do.
 #[test]
 fn a_component_can_import_the_projects_own_interface() {
     let project = scaffold_target("component-term", "component");

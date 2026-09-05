@@ -14,9 +14,9 @@
 ;; check and the UTF-8 validation that the retired `ui.*` pointer calls had to
 ;; do by hand in the host.
 ;;
-;; `;; @wasi pages=1` asks for nothing but the shared memory and its
-;; allocator, which is all a lowering needs. No WASI interface is imported at
-;; all: drawing is the whole program.
+;; `;; @wasi ui` generates that boundary from `air/wit/ai-direct-host/host.wit`,
+;; the same file `air` implements the interface against. No WASI interface is
+;; imported at all: drawing is the whole program.
 ;;
 ;; Memory map (1 page):
 ;;   0x100..0x200 text, packed by `;; @data`
@@ -24,21 +24,7 @@
 ;;   0x8000+      canonical ABI bump allocation
 
 (component
-  ;; @wasi pages=1
-
-  ;; --- the host's UI capability, imported like any other interface -------
-  (import "ai-direct:host/ui" (instance $ui
-    (export "label" (func (param "text" string)))
-    (export "button" (func (param "text" string) (result bool)))))
-  (alias export $ui "label" (func $label))
-  (alias export $ui "button" (func $button))
-  (core func $label-l
-    (canon lower (func $label) (memory $memory) (realloc $realloc)))
-  (core func $button-l
-    (canon lower (func $button) (memory $memory) (realloc $realloc)))
-  (core instance $host-ui
-    (export "label" (func $label-l))
-    (export "button" (func $button-l)))
+  ;; @wasi ui pages=1
 
   ;; A second core module, linked here and sharing the one memory. This is
   ;; what `[[libs]]` did for Core apps; inside a component the same split is
@@ -98,7 +84,7 @@
 
   (core instance $app (instantiate $main
     (with "env" (instance $mem))
-    (with "ui" (instance $host-ui))
+    (with "ui" (instance $ui))
     (with "counter" (instance $count))))
 
   (func $frame (canon lift (core func $app "frame")))

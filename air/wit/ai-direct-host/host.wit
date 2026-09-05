@@ -1,0 +1,52 @@
+// The harness's own interfaces, offered to every component `air` runs.
+//
+// This file is the source of truth for both sides: `air/src/component.rs`
+// implements it with `func_wrap`, and `;; @wasi term` / `;; @wasi ui`
+// generate the guest's imports from it. A signature stated once cannot drift.
+
+package ai-direct:host;
+
+/// A raw-mode terminal. The Core `term.*` namespace this replaces answered
+/// `i32` everywhere and encoded a failed size query as a negative number;
+/// stated in WIT, a question answers `bool` and a size answers two `u32`s.
+interface term {
+    /// Enter raw mode. False when the terminal refused.
+    enter: func() -> bool;
+
+    /// Leave raw mode. Idempotent: the host also restores on exit.
+    exit: func();
+
+    /// Whether a terminal is attached at all. A piped stdin answers false.
+    available: func() -> bool;
+
+    /// Clear the screen.
+    clear: func();
+
+    /// Move the cursor. The origin is (0, 0).
+    move-to: func(x: u32, y: u32);
+
+    /// Columns and rows. A failed query answers (0, 0), which every caller
+    /// already handles as "too small to draw in".
+    size: func() -> tuple<u32, u32>;
+
+    /// Flush pending output.
+    flush: func();
+
+    /// Block for one key. A printable key is its own byte; a named key is
+    /// `0x100 | code`.
+    read-key: func() -> u32;
+}
+
+/// An immediate-mode UI, redrawn each frame by a `mode = "gui"` host loop.
+///
+/// The Core `ui.*` namespace this replaces passed `(ptr, len)` into guest
+/// memory, which has no meaning across a component boundary. Stated in WIT the
+/// signatures need no memory at all, and the canonical ABI does the copy, the
+/// bounds check and the UTF-8 validation the Core wrappers did by hand.
+interface ui {
+    /// Draw a line of text.
+    label: func(text: string);
+
+    /// Draw a button. True on the frame it was clicked.
+    button: func(text: string) -> bool;
+}

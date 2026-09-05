@@ -23,6 +23,11 @@
 //! - `$net` — the same for `wasi:sockets`, when the application asks for
 //!   `sockets`: `(with "net" (instance $net))`, `"create-tcp-socket"`,
 //!   `"tcp-socket.accept"`, `"pollable.block"`.
+//! - `$term` / `$ui` — the harness's own `ai-direct:host` interfaces, on the
+//!   same terms: `(with "term" (instance $term))` and `"enter"`, `"size"`,
+//!   `"read-key"`; `(with "ui" (instance $ui))` and `"label"`, `"button"`.
+//!   These are not WASI, but they are a boundary generated from WIT, and an
+//!   application has no reason to care which package a capability came from.
 //!
 //! Every type and signature in `$fs` and `$net` is generated from the vendored
 //! WASI WIT (see `wit.rs`); only these instance names are harness ABI. The
@@ -73,6 +78,8 @@ pub struct Boundary {
     args: bool,
     filesystem: bool,
     sockets: bool,
+    term: bool,
+    ui: bool,
 }
 
 impl Boundary {
@@ -133,8 +140,8 @@ const STREAM_RESOURCES: [(&str, &str); 3] = [
 /// Parse the argument list of `;; @wasi <args>`.
 ///
 /// Arguments are capability names (`stdin`, `stdout`, `stderr`, `exit`,
-/// `exit-with-code`, `args`, `filesystem`, `sockets`) and settings
-/// (`pages=<n>`, `heap=<addr>`).
+/// `exit-with-code`, `args`, `filesystem`, `sockets`, `term`, `ui`) and
+/// settings (`pages=<n>`, `heap=<addr>`).
 /// Order does not matter and an unknown word is an error rather than a
 /// silently ignored typo.
 pub fn parse(args: &str) -> Result<Boundary> {
@@ -149,6 +156,8 @@ pub fn parse(args: &str) -> Result<Boundary> {
         args: false,
         filesystem: false,
         sockets: false,
+        term: false,
+        ui: false,
     };
     for word in args.split_whitespace() {
         match word.split_once('=') {
@@ -168,11 +177,14 @@ pub fn parse(args: &str) -> Result<Boundary> {
                 "args" => boundary.args = true,
                 "filesystem" => boundary.filesystem = true,
                 "sockets" => boundary.sockets = true,
+                "term" => boundary.term = true,
+                "ui" => boundary.ui = true,
                 other => {
                     return Err(wasmtime::Error::msg(format!(
                         "unknown `@wasi` capability `{other}`; \
                          expected `stdin`, `stdout`, `stderr`, `exit`, \
-                         `exit-with-code`, `args`, `filesystem` or `sockets`"
+                         `exit-with-code`, `args`, `filesystem`, `sockets`, \
+                         `term` or `ui`"
                     )));
                 }
             },
@@ -221,6 +233,8 @@ pub fn emit(boundary: &Boundary, imports: &Imports) -> Result<String> {
             imports,
         )?,
         derive(boundary.sockets, "sockets", &crate::wit::SOCKETS, imports)?,
+        derive(boundary.term, "term", &crate::wit::TERM, imports)?,
+        derive(boundary.ui, "ui", &crate::wit::UI, imports)?,
     ];
     for (_, generated) in derived.iter().flatten() {
         out.push_str(&generated.wat);

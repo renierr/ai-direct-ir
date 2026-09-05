@@ -208,7 +208,7 @@ and emits the imports from it — enum cases, flags, records, variants,
 resources and method signatures — plus the aliases, canonical lowerings, and
 the core instance an application links. Only the instance names (`$fs-types`,
 `$net-tcp`, `$fs`, `$net`, ...) are harness ABI; every type and signature is
-the WIT's. `filesystem` and `sockets` are both generated this way; the
+the WIT's. `filesystem`, `sockets`, `term` and `ui` are all generated this way; the
 difference between them is a table of interface names in `air/src/wit.rs`.
 
 The application says how much of it to generate. `wasi:filesystem` declares 29
@@ -231,8 +231,50 @@ Converting `examples/sha256sum/sha256sum.wat` deleted 51 hand-transcribed
 lines for one directive word, `filesystem`, with no change to the application's
 `"fs"` imports and a byte-identical digest. The emitter (`air/src/wit.rs`) is
 generic over resources, records, variants, enums, flags, tuples, options,
-results, lists, borrows, and owns. Provider WIT (`ai-direct:sha256/digest`),
-`wasi:clocks` and `wasi:random` still wait for the same treatment.
+results, lists, borrows, and owns. Provider WIT (`ai-direct:sha256/digest`,
+`ai-direct:text-width/width`), `wasi:clocks` and `wasi:random` still wait for
+the same treatment.
+
+#### The harness's own interfaces
+
+Nothing about the emitter is WASI-specific, and the interfaces `air` itself
+implements were the proof. `ai-direct:host/term` and `ai-direct:host/ui` used
+to exist twice: as `func_wrap` calls in `air/src/component.rs`, and as a
+hand-transcribed instance import in every component that used them. Two
+statements of one signature, with nothing checking they agreed.
+
+`air/wit/ai-direct-host/host.wit` is now the single statement, and `;; @wasi
+term` / `;; @wasi ui` generate the guest side from it. This is the one WIT file
+in the repository that is not vendored — `air` is the implementation, so the
+file is the contract rather than a copy of someone else's.
+
+| Source | Boundary before | After |
+|---|---|---|
+| `examples/prompts-raw/prompts-raw.wat` | 34 lines | `term` |
+| `examples/gui-hello/gui-hello.wat` | 12 lines | `ui` |
+| the `air new` GUI starter | 15 lines | `ui` |
+| `ui_caller` in `air/tests/cli.rs` | 13 lines | `ui` |
+
+The artifacts grew slightly — prompts-raw 5144 to 5264 bytes, gui-hello 1195 to
+1212 — for the same reason `sockets` grew `sha256sum`: the generic emitter
+prefixes its identifiers per interface and those names land in the name
+section. Behaviour is unchanged, checked the way each is normally checked:
+`prompts-raw` driven through a 120x40 pty to its "Created configuration for
+staging | features workers" line, and `gui-hello` entered once through the
+command path, where it asks for the same three UI commands as before
+(`label "AIR GUI proof: egui"`, `button "Click me safely" -> false`,
+`label "Clicks: 0"`).
+
+Two rules carry over unchanged, and both are tested. A `"term"` import the WIT
+does not declare fails at the directive rather than in the linker, and `term`
+with no `"term"` import at all is a stale directive rather than an unused
+instance. One more matters here because `term` and `ui` share a package: asking
+for one imports only one, so a drawing component declares no terminal.
+
+The directive is still a shorthand and not a gate. A component may declare
+`ai-direct:host/term` by hand exactly as before, which is what a consumer of an
+interface `air` does *not* implement has to do; `a_component_can_import_the_projects_own_interface`
+keeps proving it.
 
 #### What sockets changed
 
@@ -368,9 +410,9 @@ next hand-maintained detail. It also changes what an AI has to know: the
 Component Model text format is thinly represented in training data, which is
 exactly why these lines were copied between examples rather than written. A
 generated boundary removes the need for that knowledge instead of documenting
-it. Interfaces that are not WASI — a provider's, or the project's own
-`ai-direct:host/term` — are still declared by hand; they are one import and one
-lowering, not a type graph.
+it. The project's own interfaces are generated the same way now, from
+`air/wit/ai-direct-host/host.wit`. A provider's contract is the one still
+declared by hand, and it is one import and one lowering, not a type graph.
 
 New projects contain `src/README.md` and the generic
 `.agents/skills/ai-direct-ir/SKILL.md`. The skill covers WAT/WASM/WIT/provider
@@ -450,8 +492,9 @@ on `/quit` with exit 0. Benchmarked at 17.3k req/s on the in-memory route and
 verifies the `frame` export without opening a window, and `air dist` packages
 it. The frame loop itself is verified by hand, because egui needs a display.
 What a frame does is not: `ai-direct:host/ui` is linked for every component, so
-a command-mode component calls `label` and `button` under test and proves the
-strings cross by value and that invalid UTF-8 never reaches the host.
+a command-mode component calls `label` and `button` under test -- through the
+generated `;; @wasi ui` boundary -- and proves the strings cross by value and
+that invalid UTF-8 never reaches the host.
 
 `examples/prompts-raw/` is a component driving a raw terminal. The flow itself
 is verified by hand under a pty, because crossterm needs one: environment
@@ -459,8 +502,9 @@ selection with the arrow keys, feature toggles with Space, and Enter through
 to `Created configuration for staging | features workers, tls, metrics`, plus
 Esc for `Cancelled.` and exit 1. Two things do not need a pty and are tested.
 Refusing a pipe travels the whole boundary -- `available` answers a `bool`
-through `ai-direct:host/term`, the message goes out over `wasi:cli/stdout`,
-and the status comes from `exit-with-code` -- and the vendored width provider
+through the generated `ai-direct:host/term` instance, the message goes out over
+`wasi:cli/stdout`, and the status comes from `exit-with-code` -- and the
+vendored width provider
 answers 15 for the styled title whose byte count is 28. The provider's own
 conformance suite lives in the catalog and covers ten cases plus a
 cross-check against Python's `unicodedata`.
@@ -473,7 +517,12 @@ rebuild, and its packaged bundle runs under `env -i PATH=/var/empty`.
 
 ## Current Gaps
 
-- No WIT conformance check (`wasm-tools component targets`) in `air`.
+- No WIT conformance check (`wasm-tools component targets`) in `air`. Nothing
+  verifies that a `[[providers]]` artifact exports the world its contract
+  declares; the consumer's hand-written import is the only statement of it, and
+  a disagreement surfaces as a link failure. The harness's own interfaces no
+  longer have this problem -- `air/wit/ai-direct-host/host.wit` is one file for
+  both sides -- which is the shape a provider's WIT should reach.
 - No build-time composition, so a component app ships alongside its providers
   rather than as one fused artifact, and resource handles cannot cross a
   provider boundary.
@@ -744,6 +793,11 @@ things runtime linking cannot do.
 A component imports a project-owned interface exactly as it imports a WASI one;
 the harness supplies it through the component linker. `ai-direct:host/term`
 exposes the terminal capability that Core apps reach through `term.*`.
+
+Both of these are declared in `air/wit/ai-direct-host/host.wit` and generated
+into an application by `;; @wasi term` / `;; @wasi ui`, on the same terms as a
+WASI capability — see The harness's own interfaces. The design argument below
+is what that file records.
 
 Its signatures are not the Core ones transcribed, and `examples/prompts-raw/`
 is what settled that. `term.*` answers every call with an `i32` status a
@@ -1077,17 +1131,20 @@ real consumer.
 Ordered so that each step is provable on its own, and so the catalog stops
 being specification-only before more specification is written.
 
-1. Extend the WIT-driven boundary to the remaining interfaces and provider
-    contracts. `filesystem` and `sockets` are generated from the vendored WASI
-    WIT; `wasi:clocks`, `wasi:random` and the catalog's provider WIT still go
-    through hand-written declarations. The granularity rule (the application's
-    own imports name what to generate), the naming rule (the WIT export key,
-    minus its bracketed kind) and handle release (`<resource>.drop`) are all
-    settled, so a new WASI interface is now a table entry in `air/src/wit.rs`
-    and nothing else. What is left is not WASI: a provider's WIT arrives as a
-    file rather than a vendored constant, and the emitter has never been
-    pointed at one. See The Boundary From WIT and What Actually Needs A Harness
-    Change.
+1. Point the WIT emitter at a provider's contract. `filesystem`, `sockets`,
+    `term` and `ui` are generated; the catalog's provider WIT
+    (`ai-direct:sha256/digest`, `ai-direct:text-width/width`), `wasi:clocks`
+    and `wasi:random` still go through hand-written declarations. The
+    granularity rule (the application's own imports name what to generate), the
+    naming rule (the WIT export key, minus its bracketed kind) and handle
+    release (`<resource>.drop`) are all settled, so a new *known* interface is
+    a table entry in `air/src/wit.rs` and nothing else. What is left is the
+    unknown one: a provider's WIT arrives as a file a `[[providers]]` entry
+    names, not as a constant compiled into `air`, so `resolve()` has to take a
+    path and the capability table an entry built at load time. Adding `term`
+    and `ui` proved the emitter is not WASI-specific, which was the open
+    question. See The harness's own interfaces and What Actually Needs A
+    Harness Change.
 2. Continue up the memory ladder: records with named fields, then a real
    allocator. Segment addresses are handled (see Harness-Placed Segments) and
    a request loop can now release a whole iteration at once (see Releasing

@@ -6,6 +6,10 @@
 ;;   ai-direct:host/term            raw mode, cursor, size, key events
 ;;   ai-direct:text-width/width     Unicode display columns
 ;;
+;; The first is the harness's own, so `;; @wasi term` generates it from
+;; `air/wit/ai-direct-host/host.wit` -- the same file `air` implements. The
+;; second is a vendored provider, still declared by hand.
+;;
 ;; The second is why this example exists. Centering the title needs the number
 ;; of terminal *columns* it occupies, which is neither its byte count (28) nor
 ;; its character count: the label carries ANSI styling that costs no columns
@@ -23,41 +27,7 @@
 ;;   0x8000+ canonical ABI bump allocation
 
 (component
-  ;; @wasi stdout exit-with-code pages=2
-
-  ;; --- the terminal, a project-owned host interface ----------------------
-  (import "ai-direct:host/term" (instance $term
-    (export "available" (func (result bool)))
-    (export "enter" (func (result bool)))
-    (export "exit" (func))
-    (export "clear" (func))
-    (export "move-to" (func (param "x" u32) (param "y" u32)))
-    (export "size" (func (result (tuple u32 u32))))
-    (export "read-key" (func (result u32)))))
-  (alias export $term "available" (func $available))
-  (alias export $term "enter" (func $enter))
-  (alias export $term "exit" (func $leave))
-  (alias export $term "clear" (func $clear))
-  (alias export $term "move-to" (func $move-to))
-  (alias export $term "size" (func $size))
-  (alias export $term "read-key" (func $read-key))
-  (core func $available-l (canon lower (func $available)))
-  (core func $enter-l (canon lower (func $enter)))
-  (core func $leave-l (canon lower (func $leave)))
-  (core func $clear-l (canon lower (func $clear)))
-  (core func $move-to-l (canon lower (func $move-to)))
-  ;; A `tuple<u32, u32>` does not fit one core result, so `size` is lowered
-  ;; with a return area: the callee writes both fields into memory.
-  (core func $size-l (canon lower (func $size) (memory $memory)))
-  (core func $read-key-l (canon lower (func $read-key)))
-  (core instance $host-term
-    (export "available" (func $available-l))
-    (export "enter" (func $enter-l))
-    (export "exit" (func $leave-l))
-    (export "clear" (func $clear-l))
-    (export "move-to" (func $move-to-l))
-    (export "size" (func $size-l))
-    (export "read-key" (func $read-key-l)))
+  ;; @wasi stdout exit-with-code term pages=2
 
   ;; --- the vendored width provider ---------------------------------------
   (import "ai-direct:text-width/width@0.1.0" (instance $w
@@ -336,7 +306,7 @@
   (core instance $app (instantiate $main
     (with "env" (instance $mem))
     (with "wasi" (instance $wasi))
-    (with "term" (instance $host-term))
+    (with "term" (instance $term))
     (with "provider" (instance $prov))))
 
   (func $run (result (result)) (canon lift (core func $app "run")))

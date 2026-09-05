@@ -213,7 +213,7 @@ fn project_doc(template: &str, name: &str, target: &Kind) -> String {
             "air run",
             "`air run` links the component, applies the manifest's grants, and calls\nthe entry point. `air dist` contains the `air` executable, a rewritten local\n`host.toml`, the component, every declared provider, and any configured\n`root` data directory.",
             "",
-            "The component exports `wasi:cli/run` (the `[app].run` entry). `;; @wasi`\ngenerates the WASI 0.2 boundary from the capabilities it names, narrowed by the\napplication's own imports. Nothing is reachable unless the manifest grants it:\ndirectories through `root`/`[[dirs]]`, sockets through `network = true`.",
+            "The component exports `wasi:cli/run` (the `[app].run` entry). `;; @wasi`\ngenerates the boundary from the capabilities it names -- WASI 0.2 plus the\nharness's own `term` and `ui` -- narrowed by the application's own imports. Nothing is reachable unless the manifest grants it:\ndirectories through `root`/`[[dirs]]`, sockets through `network = true`.",
             "Run `air run` and exercise the expected CLI behavior",
             "- Never hand-write the WASI boundary. `;; @wasi <capabilities>` generates the\n  imports, the shared memory and the canonical ABI lowering.\n- Depend on other components through `[[providers]]`, wired at link time. A\n  prebuilt Core module is not a dependency: lift it with `wasm-tools component\n  new` first.\n- `air check` links and instantiates the complete declared graph. An unresolved\n  import is an integration error, not a reason to add a harness API.",
         )
@@ -395,22 +395,10 @@ fn gui_starter(name: &str) -> (String, String) {
          ;; A named data segment gets $name.ptr and $name.len from air, so\n\
          ;; no string length is ever written by hand.\n\
          (component\n\
-         \x20 ;; @wasi pages=1\n\
-         \n\
-         \x20 ;; The host's UI capability, imported like any other interface.\n\
-         \x20 ;; Strings cross by value: the canonical ABI does the copy.\n\
-         \x20 (import \"ai-direct:host/ui\" (instance $ui\n\
-         \x20   (export \"label\" (func (param \"text\" string)))\n\
-         \x20   (export \"button\" (func (param \"text\" string) (result bool)))))\n\
-         \x20 (alias export $ui \"label\" (func $label))\n\
-         \x20 (alias export $ui \"button\" (func $button))\n\
-         \x20 (core func $label-l\n\
-         \x20   (canon lower (func $label) (memory $memory) (realloc $realloc)))\n\
-         \x20 (core func $button-l\n\
-         \x20   (canon lower (func $button) (memory $memory) (realloc $realloc)))\n\
-         \x20 (core instance $host-ui\n\
-         \x20   (export \"label\" (func $label-l))\n\
-         \x20   (export \"button\" (func $button-l)))\n\
+         \x20 ;; `ui` is the host's own interface, generated from WIT exactly\n\
+         \x20 ;; like a WASI one. Strings cross by value: the canonical ABI\n\
+         \x20 ;; does the copy, the bounds check and the UTF-8 validation.\n\
+         \x20 ;; @wasi ui pages=1\n\
          \n\
          \x20 (core module $main\n\
          \x20   (import \"env\" \"memory\" (memory 1))\n\
@@ -428,7 +416,7 @@ fn gui_starter(name: &str) -> (String, String) {
          \x20   (data $status (i32.const 512) \"Button is ready\"))\n\
          \x20 (core instance $app (instantiate $main\n\
          \x20   (with \"env\" (instance $mem))\n\
-         \x20   (with \"ui\" (instance $host-ui))))\n\
+         \x20   (with \"ui\" (instance $ui))))\n\
          \n\
          \x20 (func $frame (canon lift (core func $app \"frame\")))\n\
          \x20 (export \"frame\" (func $frame))\n\
