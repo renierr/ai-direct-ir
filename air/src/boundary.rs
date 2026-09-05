@@ -18,7 +18,11 @@
 //!   "wasi" (instance $wasi))`
 //!
 //! `$wasi` exports one Core function per requested capability: `get-stdin`,
-//! `read`, `get-stdout`, `get-stderr`, `write`, `exit`.
+//! `read`, `get-stdout`, `get-stderr`, `write`, `exit`, `exit-with-code`.
+//!
+//! `exit` takes a `result` discriminant — 0 or 1, nothing else — so it says
+//! only whether the run failed. A program that wants a POSIX-style status asks
+//! for `exit-with-code`, which takes a `u8`.
 
 use wasmtime::Result;
 
@@ -38,6 +42,7 @@ pub struct Boundary {
     stdout: bool,
     stderr: bool,
     exit: bool,
+    exit_with_code: bool,
 }
 
 impl Boundary {
@@ -55,9 +60,9 @@ impl Boundary {
 
 /// Parse the argument list of `;; @wasi <args>`.
 ///
-/// Arguments are capability names (`stdin`, `stdout`, `stderr`, `exit`) and
-/// settings (`pages=<n>`, `heap=<addr>`). Order does not matter and an unknown
-/// word is an error rather than a silently ignored typo.
+/// Arguments are capability names (`stdin`, `stdout`, `stderr`, `exit`,
+/// `exit-with-code`) and settings (`pages=<n>`, `heap=<addr>`). Order does not
+/// matter and an unknown word is an error rather than a silently ignored typo.
 pub fn parse(args: &str) -> Result<Boundary> {
     let mut boundary = Boundary {
         pages: DEFAULT_PAGES,
@@ -66,6 +71,7 @@ pub fn parse(args: &str) -> Result<Boundary> {
         stdout: false,
         stderr: false,
         exit: false,
+        exit_with_code: false,
     };
     for word in args.split_whitespace() {
         match word.split_once('=') {
@@ -81,10 +87,12 @@ pub fn parse(args: &str) -> Result<Boundary> {
                 "stdout" => boundary.stdout = true,
                 "stderr" => boundary.stderr = true,
                 "exit" => boundary.exit = true,
+                "exit-with-code" => boundary.exit_with_code = true,
                 other => {
                     return Err(wasmtime::Error::msg(format!(
                         "unknown `@wasi` capability `{other}`; \
-                         expected `stdin`, `stdout`, `stderr` or `exit`"
+                         expected `stdin`, `stdout`, `stderr`, `exit` \
+                         or `exit-with-code`"
                     )));
                 }
             },
@@ -201,12 +209,24 @@ fn emit_cli(boundary: &Boundary, out: &mut String) {
              \x20 (alias export $stderr \"get-stderr\" (func $get-stderr))\n\n"
         ));
     }
-    if boundary.exit {
+    if boundary.exit || boundary.exit_with_code {
         out.push_str(&format!(
-            "  (import \"wasi:cli/exit@{VERSION}\" (instance $exit-i\n\
-             \x20   (export \"exit\" (func (param \"status\" (result))))))\n\
-             \x20 (alias export $exit-i \"exit\" (func $exit-fn))\n\n"
+            "  (import \"wasi:cli/exit@{VERSION}\" (instance $exit-i\n"
         ));
+        if boundary.exit {
+            out.push_str("    (export \"exit\" (func (param \"status\" (result))))\n");
+        }
+        if boundary.exit_with_code {
+            out.push_str("    (export \"exit-with-code\" (func (param \"status-code\" u8)))\n");
+        }
+        out.push_str("    ))\n");
+        if boundary.exit {
+            out.push_str("  (alias export $exit-i \"exit\" (func $exit-fn))\n");
+        }
+        if boundary.exit_with_code {
+            out.push_str("  (alias export $exit-i \"exit-with-code\" (func $exit-code-fn))\n");
+        }
+        out.push('\n');
     }
 }
 
@@ -259,6 +279,9 @@ fn emit_lowering(boundary: &Boundary, out: &mut String) {
     if boundary.exit {
         lowered.push(("exit", "$exit-fn", false));
     }
+    if boundary.exit_with_code {
+        lowered.push(("exit-with-code", "$exit-code-fn", false));
+    }
     for (name, func, needs_memory) in &lowered {
         let extra = if *needs_memory {
             " (memory $memory) (realloc $realloc)"
@@ -302,6 +325,26 @@ mod tests {
         assert!(parse("stdout pages=x").is_err());
         assert!(parse("stdout size=2").is_err());
         assert!(parse("stdout pages=0").is_err());
+    }
+
+    /// `exit` takes a `result`, so only 0 and 1 are representable. Passing an
+    /// exit code to it traps on an unexpected discriminant, which is why a
+    /// program that wants a status code asks for `exit-with-code` instead.
+    #[test]
+    fn exit_and_exit_with_code_are_separate_capabilities() {
+        let only_exit = emit(&parse("exit").unwrap());
+        assert!(only_exit.contains("(export \"exit\" (func (param \"status\" (result))))"));
+        assert!(!only_exit.contains("exit-with-code"), "{only_exit}");
+
+        let both = emit(&parse("exit exit-with-code").unwrap());
+        assert!(both.contains("(export \"exit-with-code\" (func (param \"status-code\" u8)))"));
+        // One interface instance carries both functions.
+        assert_eq!(both.matches("wasi:cli/exit@").count(), 1);
+        assert!(both.contains("$exit-l") && both.contains("$exit-with-code-l"));
+
+        let only_code = emit(&parse("exit-with-code").unwrap());
+        assert!(only_code.contains("exit-with-code"));
+        assert!(!only_code.contains("(export \"exit\" (func"), "{only_code}");
     }
 
     #[test]

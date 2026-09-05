@@ -826,3 +826,66 @@ fn a_region_over_a_placed_segment_is_rejected() {
     let message = stderr(&built);
     assert!(message.contains("$fixed"), "{message}");
 }
+
+/// `wasi:cli/exit`'s `exit` takes a `result`, so 0 and 1 are the only
+/// representable values and anything else traps on the discriminant. The
+/// prompts example documents three exit codes, so it asks for `exit-with-code`.
+#[test]
+fn prompts_example_reports_its_documented_exit_codes() {
+    let _guard = examples_lock();
+    let manifest = repo().join("examples/prompts/host.toml");
+    let manifest = manifest.to_str().expect("utf-8 path");
+
+    for (input, expected, path) in [
+        ("my-app\n1\n1\ny\n", 0, "completed"),
+        ("my-app\n1\n1\nn\n", 1, "cancelled"),
+        ("", 2, "input closed"),
+    ] {
+        let mut child = Command::new(air_bin())
+            .args(["run", manifest])
+            .current_dir(repo())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn air run");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(input.as_bytes())
+            .expect("write answers");
+        let out = child.wait_with_output().expect("air run finished");
+        assert_eq!(
+            out.status.code(),
+            Some(expected),
+            "{path} path: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// The cancel message ends in a newline. It once did not: `✖` is three UTF-8
+/// bytes and the hand-written length counted characters.
+#[test]
+fn prompts_cancel_message_is_not_truncated() {
+    let _guard = examples_lock();
+    let manifest = repo().join("examples/prompts/host.toml");
+    let mut child = Command::new(air_bin())
+        .args(["run", manifest.to_str().expect("utf-8 path")])
+        .current_dir(repo())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn air run");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"my-app\n1\n1\nn\n")
+        .expect("write answers");
+    let out = child.wait_with_output().expect("air run finished");
+    let printed = stdout(&out);
+    assert!(printed.ends_with("Cancelled.\n"), "{printed:?}");
+}
