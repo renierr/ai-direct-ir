@@ -102,10 +102,9 @@ A manifest does not have to declare `target`. The artifact's own preamble says
 whether it is a component (layer `0d 00`) or a Core module (`01 00`); declaring
 one that disagrees is an error rather than a confusing failure later.
 
-`target = "native"` (Core WASM on WASI Preview 1) remains supported, and is
-still what `prompts-raw` uses — because of a prebuilt Core provider linked
-through `[[bridges]]`, not because WASI 0.2 lacks an interface. See
-`docs/PROJECT.md`.
+`target = "native"` (Core WASM on WASI Preview 1) remains supported, but no
+example uses it any more: every example in this repository is a WASI 0.2
+component. See `docs/PROJECT.md`.
 
 `mode` is a separate question from `target`: `command` enters the app once,
 `gui` opens a native window and calls the entry point once per drawn frame. A
@@ -171,8 +170,8 @@ the target and its linker to be installed separately.
 
 - `air/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`link`/`cmds` modules)
 - `air/tests/cli.rs` — end-to-end tests that run the real binary
-- `examples/` — WASI 0.2 components, except `prompts-raw/` (Core WASM, for its `[[bridges]]` provider). Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
-- `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`
+- `examples/` — all WASI 0.2 components. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
+- `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`, for the Core `[[libs]]`/`[[bridges]]` path; no manifest references them now
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 
 Start with `docs/PROJECT.md`. It is the living project documentation

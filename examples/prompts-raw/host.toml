@@ -1,22 +1,16 @@
-# Responsive raw-key setup UI: WAT state + Rust unicode-width bridge.
-# Requires an interactive terminal; run the scriptable prompts example for pipes.
+# Responsive raw-key setup UI: a WASI 0.2 component with WAT state, the
+# project's terminal interface, and a vendored Unicode width provider.
+# Requires an interactive terminal; run the scriptable prompts example for
+# pipes.
 mode = "command"
 
-[[bridges]]
-path = "../../libs/text-width/text_width.wasm"
-as = "bridge"
-alloc = "text_width_alloc"
-
-[[bridges.calls]]
-as = "text_width"
-func = "text_width_utf8"
-in_ptr = 0
-in_len = 1
-out_ptr = 2
-out_len = 4
-max_in = 128
+# Terminal columns are neither bytes nor characters. This package wraps the
+# `unicode-width` crate as a component; its WIT contract, artifact hash and
+# upstream licences travel with it under vendor/.
+[[providers]]
+path = "vendor/ai-direct-text-width-0.1.0/artifacts/wasm32-wasi/text-width.component.wasm"
 
 [app]
 source = "prompts-raw.wat"
 path = "prompts-raw.wasm"
-run = "_start"
+run = "wasi:cli/run"

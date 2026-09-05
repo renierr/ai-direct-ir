@@ -202,37 +202,58 @@ pub fn link_all(
 /// interface is not a WASI question: a component imports one exactly as it
 /// imports `wasi:io/streams`, and the harness supplies it here.
 ///
-/// Only the memory-free calls are exposed.
+/// The signatures are not the Core ones transcribed. `term.*` answers every
+/// call with an `i32` status a caller almost never reads, and packs the
+/// terminal size into one of them; stated in WIT the questions have their own
+/// shapes -- `available` and `enter` answer `bool`, `size` answers a pair, and
+/// the calls whose failure a program cannot act on answer nothing at all. The
+/// harness restores the terminal on the way out however the guest left, so a
+/// failed `exit` is not the guest's problem to handle.
 const TERM_INTERFACE: &str = "ai-direct:host/term";
 
 fn add_term_to_linker(linker: &mut Linker<Host>) -> Result<()> {
     let mut term = linker.instance(TERM_INTERFACE)?;
     term.func_wrap("enter", |mut store: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::enter(&mut store.data_mut().term_active),))
+        Ok((crate::term::enter(&mut store.data_mut().term_active) == 0,))
     })?;
     term.func_wrap("exit", |mut store: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::exit(&mut store.data_mut().term_active),))
+        crate::term::exit(&mut store.data_mut().term_active);
+        Ok(())
     })?;
     term.func_wrap("available", |_: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::available(),))
+        Ok((crate::term::available() == 1,))
     })?;
     term.func_wrap("clear", |store: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::clear(store.data().term_active),))
+        crate::term::clear(store.data().term_active);
+        Ok(())
     })?;
     term.func_wrap(
         "move-to",
-        |store: StoreContextMut<'_, Host>, (x, y): (i32, i32)| {
-            Ok((crate::term::move_to(store.data().term_active, x, y),))
+        |store: StoreContextMut<'_, Host>, (x, y): (u32, u32)| {
+            crate::term::move_to(store.data().term_active, x as i32, y as i32);
+            Ok(())
         },
     )?;
+    // A terminal too large to describe in two `u16`s does not exist, but a
+    // failed query does: it answers 0x0, which every caller already has to
+    // handle as "too small to draw in".
     term.func_wrap("size", |_: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::size(),))
+        let packed = crate::term::size();
+        let size = if packed < 0 {
+            (0u32, 0u32)
+        } else {
+            ((packed >> 16) as u32, (packed & 0xffff) as u32)
+        };
+        Ok((size,))
     })?;
     term.func_wrap("flush", |_: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::flush(),))
+        crate::term::flush();
+        Ok(())
     })?;
+    // Key codes are the Core namespace's, unchanged: a printable key is its
+    // own byte and a named key is `0x100 | <code>`.
     term.func_wrap("read-key", |store: StoreContextMut<'_, Host>, (): ()| {
-        Ok((crate::term::read_key(store.data().term_active)?,))
+        Ok((crate::term::read_key(store.data().term_active)? as u32,))
     })?;
     Ok(())
 }

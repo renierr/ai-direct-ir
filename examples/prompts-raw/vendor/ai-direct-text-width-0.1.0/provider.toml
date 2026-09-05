@@ -1,0 +1,17 @@
+[package]
+name = "ai-direct:text-width"
+version = "0.1.0"
+description = "Terminal display columns of UTF-8 text, per Unicode Standard Annex #11."
+license = "Apache-2.0 AND (MIT OR Apache-2.0)"
+wit = "wit/text-width.wit"
+
+[[artifacts]]
+kind = "component"
+target = "wasm32-wasi"
+path = "artifacts/wasm32-wasi/text-width.component.wasm"
+sha256 = "623110d784e6d73d6db4a20f2e876b438c808c32a12df4fbc68bcb41a5e5afc9"
+
+# The adapter is `no_std` with `panic = "abort"`, so the component imports
+# nothing at all: no WASI, no host capability, no ambient authority.
+[requirements]
+wasi = []

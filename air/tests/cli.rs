@@ -617,6 +617,102 @@ fn a_core_module_is_rejected_as_a_provider() {
     );
 }
 
+/// The vendored `ai-direct:text-width` provider, exercised on the case
+/// `examples/prompts-raw/` depends on: a styled label whose column count is
+/// neither its 28 bytes nor its 24 characters. ANSI CSI sequences cost no
+/// columns and `◆` costs one, so the answer is 15.
+#[test]
+fn the_vendored_width_provider_measures_terminal_columns() {
+    let project = scaffold_target("vendored-width", "component");
+    let artifact = repo()
+        .join("examples/prompts-raw/vendor/ai-direct-text-width-0.1.0")
+        .join("artifacts/wasm32-wasi/text-width.component.wasm");
+    assert!(artifact.exists(), "vendored provider is missing");
+    let manifest = project.join("host.toml");
+    let mut text = std::fs::read_to_string(&manifest).expect("read manifest");
+    text.push_str(&format!(
+        "\n[[providers]]\npath = {:?}\n",
+        artifact.to_string_lossy()
+    ));
+    std::fs::write(&manifest, text).expect("write manifest");
+    write_app(
+        &project,
+        r#"(component
+  ;; @wasi stdout
+  (import "ai-direct:text-width/width@0.1.0" (instance $w
+    (export "columns" (func (param "text" string) (result u32)))))
+  (alias export $w "columns" (func $columns))
+  (core func $columns-l
+    (canon lower (func $columns) (memory $memory) (realloc $realloc)))
+  (core instance $prov (export "columns" (func $columns-l)))
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    (import "provider" "columns" (func $columns (param i32 i32) (result i32)))
+    ;; @data 0x100..0x200
+    (data $title "\1b[1;36m◆ Project setup\1b[0m")
+    (data $nl "\n")
+    (func $digits (param $at i32) (param $n i32) (result i32)
+      (local $end i32)
+      (local.set $end
+        (if (result i32) (i32.ge_u (local.get $n) (i32.const 10))
+          (then (call $digits (local.get $at)
+                  (i32.div_u (local.get $n) (i32.const 10))))
+          (else (local.get $at))))
+      (i32.store8 (local.get $end)
+        (i32.add (i32.const 48) (i32.rem_u (local.get $n) (i32.const 10))))
+      (i32.add (local.get $end) (i32.const 1)))
+    (func (export "run") (result i32)
+      (local $len i32)
+      (local.set $len
+        (i32.sub
+          (call $digits (i32.const 0x300)
+            (call $columns (global.get $title.ptr) (global.get $title.len)))
+          (i32.const 0x300)))
+      (call $write (call $get_stdout)
+        (i32.const 0x300) (local.get $len) (i32.const 0x200))
+      (call $write (call $get_stdout)
+        (global.get $nl.ptr) (global.get $nl.len) (i32.const 0x200))
+      (i32.load (i32.const 0x200))))
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))
+    (with "provider" (instance $prov))))
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
+)
+"#,
+    );
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran), "15\n");
+}
+
+/// `prompts-raw` is a component now, so its refusal travels the whole WIT
+/// boundary: `available` answers a `bool` through `ai-direct:host/term`, the
+/// message goes out over `wasi:cli/stdout`, and the status comes from
+/// `exit-with-code`. Driving the interactive flow needs a pty and is verified
+/// by hand; refusing to start without one does not.
+#[test]
+fn prompts_raw_example_refuses_a_pipe() {
+    let _shared = examples_lock();
+    let out = Command::new(air_bin())
+        .args(["run", "examples/prompts-raw/host.toml"])
+        .current_dir(repo())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run prompts-raw");
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "interactive terminal required; use examples/prompts for pipes\n"
+    );
+}
+
 #[test]
 fn hello_example_prints_its_greeting() {
     let _shared = examples_lock();
@@ -1045,8 +1141,10 @@ fn a_component_can_import_the_projects_own_interface() {
         project.join("app.wat"),
         format!(
             r#"{boundary}
+  ;; `available` answers a `bool`, which lowers to an `i32` that is 0 or 1 --
+  ;; not a status code the caller has to know the convention for.
   (import "ai-direct:host/term" (instance $term
-    (export "available" (func (result s32)))))
+    (export "available" (func (result bool)))))
   (alias export $term "available" (func $available))
   (core func $available-l (canon lower (func $available)))
   (core instance $t (export "available" (func $available-l)))

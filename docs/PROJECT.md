@@ -34,7 +34,7 @@ tradeoffs, platform limits, and a recommendation.
 
 ## Current Harness State
 
-`air` is version `1.0.2`. It embeds the Rust `wat` parser, so an
+`air` is version `2.0.0`. It embeds the Rust `wat` parser, so an
 application needs only `air` on `PATH`, whether it is Core WAT or a
 component. A manifest does not have to declare `target`: the artifact's
 preamble says whether it is a component (layer `0d 00`) or a Core module
@@ -52,7 +52,7 @@ line or a Core function index back to authored source.
 
 | Target | Current capability boundary |
 |---|---|
-| `native` | Wasmtime, WASI Preview 1, experimental `term.*`, and declared Core providers. |
+| `native` | Wasmtime, WASI Preview 1, experimental `term.*`, and declared Core providers. No example uses it. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
 | `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. Consumes provider components through `[[providers]]`. **The default for new projects.** |
 
@@ -60,20 +60,26 @@ line or a Core function index back to authored source.
 ordinary component, and `mode = "gui"` in its manifest decides only who calls
 its entry point and how often. See Drawing A Frame.
 
-Every example except `prompts-raw` is now a WASI 0.2 component. That one needs
-`bridge.text_width`, a prebuilt Core module from a Rust crate, linked through
-`[[bridges]]` by sharing raw memory -- which a component cannot do. It is the
-last Core application in the repository, and the reason is composition, not a
-missing WASI interface.
+**Every example is now a WASI 0.2 component.** `prompts-raw` was the last
+Core one, and what it was waiting for was never a missing WASI interface: it
+needed `bridge.text_width`, a prebuilt Core module linked through
+`[[bridges]]` by sharing raw memory, which a component cannot do. The answer
+was to stop linking a Core module -- see A Provider Instead Of A Bridge.
 
-Preview 1 is therefore not deprecated. It stays the path for Core providers.
+That leaves the Core provider mechanisms without a consumer. `[[libs]]`
+(shared memory) lost its last one when `gui-hello` became a component;
+`[[bridges]]` (copying adapter) lost its last one here. Both still work, both
+are still reachable from `target = "native"`, and neither is exercised by an
+example or a test any more. `libs/sha256/` and `libs/text-width/`, the Rust
+crates they linked, are likewise unreferenced by any manifest. Retiring the
+three together is the open decision -- the same shape as `net.*` and `ui.*`,
+and the reason is the same: a mechanism with no consumer cannot be shown to
+work. See Next Work item 3.
 
-Core project-owned providers currently use experimental `[[libs]]` (shared
-memory) or `[[bridges]]` (copying adapter) manifest entries. Their exports are
-auto-wired under a project-declared namespace. These, and `web.*` and
-`term.*`, are builder-phase interfaces: redesign them directly
-when the Component Model provides the correct generic boundary. Do not add
-shims or compatibility layers without a concrete released consumer.
+Preview 1 is therefore not deprecated, but nothing in the repository depends
+on it. `web.*` and `term.*` remain builder-phase interfaces: redesign them
+directly when the Component Model provides the correct generic boundary. Do
+not add shims or compatibility layers without a concrete released consumer.
 
 ### Modular WAT Source
 
@@ -456,6 +462,18 @@ What a frame does is not: `ai-direct:host/ui` is linked for every component, so
 a command-mode component calls `label` and `button` under test and proves the
 strings cross by value and that invalid UTF-8 never reaches the host.
 
+`examples/prompts-raw/` is a component driving a raw terminal. The flow itself
+is verified by hand under a pty, because crossterm needs one: environment
+selection with the arrow keys, feature toggles with Space, and Enter through
+to `Created configuration for staging | features workers, tls, metrics`, plus
+Esc for `Cancelled.` and exit 1. Two things do not need a pty and are tested.
+Refusing a pipe travels the whole boundary -- `available` answers a `bool`
+through `ai-direct:host/term`, the message goes out over `wasi:cli/stdout`,
+and the status comes from `exit-with-code` -- and the vendored width provider
+answers 15 for the styled title whose byte count is 28. The provider's own
+conformance suite lives in the catalog and covers ten cases plus a
+cross-check against Python's `unicodedata`.
+
 Fresh native, browser, GUI, and component scaffolds have completed their
 applicable `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
@@ -479,7 +497,12 @@ rebuild.
 - No project-local component composition. The component text format cannot
   embed a prebuilt `.wasm`, and `wasm-tools compose` is deprecated upstream, so
   the mechanism is an open decision (see Intended Direction).
-- No released provider package or provider resolver/lockfile/`air add`.
+- No provider resolver, lockfile, or `air add`. The catalog holds two packages
+  (`ai-direct:sha256`, `ai-direct:text-width`), and both reach a consumer by
+  being copied into `examples/*/vendor/` by hand. Nothing checks a vendored
+  copy against the catalog, and nothing resolves a version.
+- `[[libs]]`, `[[bridges]]`, the Core `term.*` namespace and `target =
+  "native"` have no consumer, no example and no test. See Next Work item 3.
 - No generic writable WASI data mount, persistence provider, native sidecar, or
   browser provider composition.
 - The mail example remains a Core WASI Preview 1 mock inbox. It has proposed
@@ -675,6 +698,20 @@ A component imports a project-owned interface exactly as it imports a WASI one;
 the harness supplies it through the component linker. `ai-direct:host/term`
 exposes the terminal capability that Core apps reach through `term.*`.
 
+Its signatures are not the Core ones transcribed, and `examples/prompts-raw/`
+is what settled that. `term.*` answers every call with an `i32` status a
+caller almost never reads, and packs the terminal size into one of them.
+Stated in WIT each question has its own shape: `available` and `enter` answer
+`bool`, `size` answers `tuple<u32, u32>`, `read-key` answers `u32`, and the
+calls whose failure a program cannot act on -- `exit`, `clear`, `move-to`,
+`flush` -- answer nothing at all. The harness restores the terminal however
+the guest left, so a failed `exit` was never the guest's problem to handle;
+returning a code for it only made every call site drop one.
+
+An interface with no consumer cannot be designed. `ai-direct:host/term` had
+none for three months and kept the Core shape by default; the first real
+consumer changed six of its eight signatures.
+
 `ai-direct:host/ui` is the second, and it shows what the trip costs. The Core
 `ui.*` namespace it replaces passed `(ptr, len)` into guest memory, which has
 no meaning across a component boundary: the two sides share no linear memory,
@@ -695,6 +732,48 @@ smaller, not larger.
 `net.*` did not need the trip at all, and it has been deleted. It existed
 because Core WASM had no sockets; a component asks for `;; @wasi sockets` and
 gets `wasi:sockets` straight from the WIT. See Retiring net.*.
+
+### A Provider Instead Of A Bridge
+
+`examples/prompts-raw/` centres a title, which needs the number of terminal
+*columns* the title occupies. That is neither its byte count (28) nor its
+character count (24): the label carries ANSI styling that costs no columns and
+a `◆` that costs one. The answer is 15, and nothing in WAT can work it out --
+it needs the Unicode tables.
+
+As a Core app it got that number from `libs/text-width/`, a Rust `cdylib`
+linked through `[[bridges]]`: the harness copied bytes into the module's
+memory through a declared `alloc` export, called a `(ptr, len, out_ptr)`
+function, and copied four bytes back. Six manifest keys described the
+pointers. A component cannot do any of that -- it does not share a linear
+memory with the module it calls.
+
+The replacement is a provider component, `ai-direct:text-width@0.1.0` in the
+catalog, wrapping the same upstream crate:
+
+```wit
+columns: func(text: string) -> u32;
+```
+
+No pointers, no `alloc` export, no manifest description of an ABI -- one
+`[[providers]]` line and the WIT says the rest. `u32` is a flat result, so the
+call needs no return area; the `string` travels the other way, lowered into
+the provider's own memory through the provider's allocator, never the
+application's. The bridge's six pointer keys were not a mechanism the
+Component Model lacked. They were a description of a calling convention that
+WIT already states.
+
+The package is built the way `ai-direct:sha256` is: a `no_std` adapter
+exporting the canonical ABI shape the world implies, then `wasm-tools
+component embed` and `component new`. No `wit-bindgen`, no `cargo-component`.
+The component imports nothing at all, so a program that measures text cannot
+read a file. It is vendored under `examples/prompts-raw/vendor/` with its WIT,
+its artifact hash and its upstream licences, exactly as `examples/sha256sum/`
+vendors the digest provider.
+
+This is the second package in the catalog, and the first one an example needed
+rather than demonstrated: `sha256sum` exists to prove a provider works, while
+`prompts-raw` would be wrong without one.
 
 ### Drawing A Frame
 
@@ -970,13 +1049,16 @@ being specification-only before more specification is written.
    and growing past one page, still wait on an application that states the
    requirement — a long-lived collection rather than a per-request buffer.
    Grow the mail example far enough to state it.
-3. Convert `examples/prompts-raw/`, the last Core application. It needs
-   `term.*`, which components already import as `ai-direct:host/term`, and
-   `bridge.text_width`, a prebuilt Core module from a Rust crate that
-   `[[bridges]]` links by sharing raw memory. The bridge is the whole
-   remaining question: as a provider component it would be a WIT function over
-   a `string`, which is a catalog package rather than a harness change. See
-   Provider Linking.
+3. Decide whether the Core provider mechanisms retire. `[[libs]]`,
+   `[[bridges]]`, the Core `term.*` namespace and both `libs/` crates now have
+   no consumer, no example and no test; `target = "native"` has no example
+   either. That is the state `net.*` and `ui.*` were deleted from, and the
+   argument is the same -- a mechanism nothing exercises cannot be shown to
+   work, and keeping it costs a linker branch, a manifest section and a
+   scaffold path. The counter-argument is that Preview 1 is the only way to
+   link a prebuilt Core module at all, which a future provider might need
+   before it can be built as a component. Neither `[[libs]]` nor `[[bridges]]`
+   should be deleted without answering that.
 4. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing. See Provider Linking above. Converting
    `examples/server/` did not need it: source libs `;; @include`, and a

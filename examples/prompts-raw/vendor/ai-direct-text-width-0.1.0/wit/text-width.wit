@@ -1,0 +1,15 @@
+package ai-direct:text-width@0.1.0;
+
+interface width {
+  /// Terminal display columns of `text`, per Unicode Standard Annex #11.
+  ///
+  /// This is not the byte count and not the scalar count: a CJK ideograph
+  /// occupies two columns, a combining mark none, and a multi-byte character
+  /// one. ANSI CSI escape sequences consume bytes but no columns, so a caller
+  /// may pass a styled label and get the width the terminal will actually use.
+  columns: func(text: string) -> u32;
+}
+
+world text-width-provider {
+  export width;
+}

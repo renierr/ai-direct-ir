@@ -1,126 +1,345 @@
-;; Responsive raw-terminal setup flow. WAT owns state/navigation; `bridge`
-;; calls Rust unicode-width so UTF-8 display widths, not byte counts, center
-;; the title. Arrows move, Space toggles features, Enter advances, Esc cancels.
-;; Memory: 0x00 iov/nwritten; 0x100 width output; 0x1000 immutable strings.
-(module
-  (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
-  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
-  (import "term" "available" (func $available (result i32)))
-  (import "term" "enter" (func $enter (result i32)))
-  (import "term" "exit" (func $leave (result i32)))
-  (import "term" "clear" (func $clear (result i32)))
-  (import "term" "move_to" (func $move (param i32 i32) (result i32)))
-  (import "term" "size" (func $size (result i32)))
-  (import "term" "read_key" (func $key (result i32)))
-  ;; text_width(ptr, len, out_ptr) -> 0; bridge writes u32 at out_ptr.
-  (import "bridge" "text_width" (func $width (param i32 i32 i32) (result i32)))
-  ;; The bridge copies through harness-owned app memory.
-  (import "env" "memory" (memory 2)) (export "memory" (memory 0))
+;; prompts-raw.wat -- a WASI 0.2 component driving a raw-terminal setup flow.
+;;
+;; WAT owns the state and the navigation. Two things it cannot own arrive as
+;; imported WIT interfaces:
+;;
+;;   ai-direct:host/term            raw mode, cursor, size, key events
+;;   ai-direct:text-width/width     Unicode display columns
+;;
+;; The second is why this example exists. Centering the title needs the number
+;; of terminal *columns* it occupies, which is neither its byte count (28) nor
+;; its character count: the label carries ANSI styling that costs no columns
+;; and a `◆` that costs one. That number comes from a vendored provider
+;; component wrapping the `unicode-width` crate -- a released package with a
+;; WIT contract, a pinned artifact hash and its upstream licences, not a
+;; prebuilt Core module linked by sharing raw memory.
+;;
+;; Arrows move, Space toggles features, Enter advances, Esc cancels.
+;;
+;; Memory map (2 pages):
+;;   0x0100 terminal size, as (columns, rows)
+;;   0x0200 write result
+;;   0x1000..0x2000 text, packed by `;; @data`
+;;   0x8000+ canonical ABI bump allocation
 
-  (func $p (param $ptr i32) (param $len i32)
-    (i32.store (i32.const 0) (local.get $ptr))
-    (i32.store (i32.const 4) (local.get $len))
-    (call $write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)) (drop))
-  (func $at (param $x i32) (param $y i32) (param $ptr i32) (param $len i32)
-    (call $move (local.get $x) (local.get $y)) (drop)
-    (call $p (local.get $ptr) (local.get $len)))
-  (func $opt (param $x i32) (param $y i32) (param $selected i32) (param $checked i32)
-    (param $label i32) (param $len i32)
-    (local $prefix i32) (local $plen i32)
-    (local.set $prefix (i32.const 0x1400)) (local.set $plen (i32.const 4))
-    (local.get $checked) (if (then (local.set $prefix (i32.const 0x1410)) (local.set $plen (i32.const 9))))
-    (local.get $selected) (if (then
-      (local.get $checked)
-      (if (then (local.set $prefix (i32.const 0x1420)) (local.set $plen (i32.const 13)))
-          (else (local.set $prefix (i32.const 0x1430)) (local.set $plen (i32.const 9))))))
-    (call $at (local.get $x) (local.get $y) (local.get $prefix) (local.get $plen))
-    (call $p (local.get $label) (local.get $len))
-    (call $p (i32.const 0x1440) (i32.const 4)))
+(component
+  ;; @wasi stdout exit-with-code pages=2
 
-  ;; phase: 0 environment, 1 features, 2 confirm. cursor always 0..2 except
-  ;; confirm (0..1). mask is the three feature bits.
-  (func $draw (param $phase i32) (param $cur i32) (param $mask i32)
-    (param $x i32) (param $y i32) (param $title_x i32)
-    (call $clear) (drop)
-    (call $at (local.get $title_x) (local.get $y) (i32.const 0x1000) (i32.const 28))
-    (call $at (local.get $x) (i32.add (local.get $y) (i32.const 2)) (i32.const 0x1030) (i32.const 53))
-    (local.get $phase) (i32.const 0) (i32.eq)
-    (if (then
-      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4)) (i32.const 0x1070) (i32.const 29))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6)) (i32.eq (local.get $cur) (i32.const 0)) (i32.const 0) (i32.const 0x1200) (i32.const 3))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7)) (i32.eq (local.get $cur) (i32.const 1)) (i32.const 0) (i32.const 0x1203) (i32.const 7))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 8)) (i32.eq (local.get $cur) (i32.const 2)) (i32.const 0) (i32.const 0x120a) (i32.const 4))))
-    (local.get $phase) (i32.const 1) (i32.eq)
-    (if (then
-      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4)) (i32.const 0x10a0) (i32.const 35))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6)) (i32.eq (local.get $cur) (i32.const 0)) (i32.and (local.get $mask) (i32.const 1)) (i32.const 0x1210) (i32.const 7))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7)) (i32.eq (local.get $cur) (i32.const 1)) (i32.and (local.get $mask) (i32.const 2)) (i32.const 0x1217) (i32.const 3))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 8)) (i32.eq (local.get $cur) (i32.const 2)) (i32.and (local.get $mask) (i32.const 4)) (i32.const 0x121a) (i32.const 7))
-      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 11)) (i32.const 0x10d0) (i32.const 35))))
-    (local.get $phase) (i32.const 2) (i32.eq)
-    (if (then
-      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4)) (i32.const 0x1110) (i32.const 28))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6)) (i32.eq (local.get $cur) (i32.const 0)) (i32.const 0) (i32.const 0x1221) (i32.const 14))
-      (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7)) (i32.eq (local.get $cur) (i32.const 1)) (i32.const 0) (i32.const 0x1230) (i32.const 16)))))
+  ;; --- the terminal, a project-owned host interface ----------------------
+  (import "ai-direct:host/term" (instance $term
+    (export "available" (func (result bool)))
+    (export "enter" (func (result bool)))
+    (export "exit" (func))
+    (export "clear" (func))
+    (export "move-to" (func (param "x" u32) (param "y" u32)))
+    (export "size" (func (result (tuple u32 u32))))
+    (export "read-key" (func (result u32)))))
+  (alias export $term "available" (func $available))
+  (alias export $term "enter" (func $enter))
+  (alias export $term "exit" (func $leave))
+  (alias export $term "clear" (func $clear))
+  (alias export $term "move-to" (func $move-to))
+  (alias export $term "size" (func $size))
+  (alias export $term "read-key" (func $read-key))
+  (core func $available-l (canon lower (func $available)))
+  (core func $enter-l (canon lower (func $enter)))
+  (core func $leave-l (canon lower (func $leave)))
+  (core func $clear-l (canon lower (func $clear)))
+  (core func $move-to-l (canon lower (func $move-to)))
+  ;; A `tuple<u32, u32>` does not fit one core result, so `size` is lowered
+  ;; with a return area: the callee writes both fields into memory.
+  (core func $size-l (canon lower (func $size) (memory $memory)))
+  (core func $read-key-l (canon lower (func $read-key)))
+  (core instance $host-term
+    (export "available" (func $available-l))
+    (export "enter" (func $enter-l))
+    (export "exit" (func $leave-l))
+    (export "clear" (func $clear-l))
+    (export "move-to" (func $move-to-l))
+    (export "size" (func $size-l))
+    (export "read-key" (func $read-key-l)))
 
-  (func $cancel
-    (call $leave) (drop) (call $p (i32.const 0x1320) (i32.const 11))
-    (call $exit (i32.const 1)) (unreachable))
-  (func $done (param $env i32) (param $mask i32)
-    (call $leave) (drop) (call $p (i32.const 0x1300) (i32.const 30))
-    (local.get $env) (i32.const 0) (i32.eq) (if (then (call $p (i32.const 0x1200) (i32.const 3))))
-    (local.get $env) (i32.const 1) (i32.eq) (if (then (call $p (i32.const 0x1203) (i32.const 7))))
-    (local.get $env) (i32.const 2) (i32.eq) (if (then (call $p (i32.const 0x120a) (i32.const 4))))
-    (call $p (i32.const 0x1340) (i32.const 12))
-    (local.get $mask) (i32.const 1) (i32.and) (if (then (call $p (i32.const 0x1210) (i32.const 7)) (call $p (i32.const 0x1350) (i32.const 2))))
-    (local.get $mask) (i32.const 2) (i32.and) (if (then (call $p (i32.const 0x1217) (i32.const 3)) (call $p (i32.const 0x1350) (i32.const 2))))
-    (local.get $mask) (i32.const 4) (i32.and) (if (then (call $p (i32.const 0x121a) (i32.const 7))))
-    (call $p (i32.const 0x1360) (i32.const 1)) (call $exit (i32.const 0)) (unreachable))
+  ;; --- the vendored width provider ---------------------------------------
+  (import "ai-direct:text-width/width@0.1.0" (instance $w
+    (export "columns" (func (param "text" string) (result u32)))))
+  (alias export $w "columns" (func $columns))
+  ;; `u32` is a flat result, so unlike a `string` this call needs no return
+  ;; area. The string travels the other way: `air` lowers it into the
+  ;; provider's own memory through the provider's allocator, never this one.
+  (core func $columns-l
+    (canon lower (func $columns) (memory $memory) (realloc $realloc)))
+  (core instance $prov (export "columns" (func $columns-l)))
 
-  (func (export "_start")
-    (local $packed i32) (local $cols i32) (local $rows i32) (local $x i32) (local $y i32) (local $tx i32)
-    (local $phase i32) (local $cur i32) (local $mask i32) (local $env i32) (local $k i32)
-    (call $available) (i32.eqz) (if (then (call $p (i32.const 0x1380) (i32.const 62)) (call $exit (i32.const 2)) (unreachable)))
-    (call $enter) (i32.const 0) (i32.ne) (if (then (call $exit (i32.const 2)) (unreachable)))
-    (local.set $packed (call $size))
-    (local.set $cols (i32.shr_u (local.get $packed) (i32.const 16)))
-    (local.set $rows (i32.and (local.get $packed) (i32.const 65535)))
-    (i32.or (i32.lt_u (local.get $cols) (i32.const 46)) (i32.lt_u (local.get $rows) (i32.const 14)))
-    (if (then (call $clear) (drop) (call $at (i32.const 0) (i32.const 0) (i32.const 0x13d0) (i32.const 47)) (call $leave) (drop) (call $exit (i32.const 2)) (unreachable)))
-    ;; Rust bridge writes actual Unicode cell width of the cyan title at 0x100.
-    (call $width (i32.const 0x1000) (i32.const 28) (i32.const 0x100)) (i32.const 0) (i32.ne)
-    (if (then (call $leave) (drop) (call $exit (i32.const 2)) (unreachable)))
-    (local.set $x (i32.shr_u (i32.sub (local.get $cols) (i32.const 40)) (i32.const 1)))
-    (local.set $y (i32.shr_u (i32.sub (local.get $rows) (i32.const 14)) (i32.const 1)))
-    (local.set $tx (i32.shr_u (i32.sub (local.get $cols) (i32.load (i32.const 0x100))) (i32.const 1)))
-    (local.set $phase (i32.const 0)) (local.set $cur (i32.const 0)) (local.set $mask (i32.const 0))
-    (loop $input
-      (call $draw (local.get $phase) (local.get $cur) (local.get $mask) (local.get $x) (local.get $y) (local.get $tx))
-      (local.set $k (call $key))
-      (i32.or (i32.eq (local.get $k) (i32.const 0x11b)) (i32.eq (local.get $k) (i32.const 3))) (if (then (call $cancel)))
-      (i32.eq (local.get $k) (i32.const 0x102)) (if (then (local.set $cur (i32.rem_u (i32.add (local.get $cur) (i32.const 1)) (if (result i32) (i32.eq (local.get $phase) (i32.const 2)) (then (i32.const 2)) (else (i32.const 3))))) (br $input)))
-      (i32.eq (local.get $k) (i32.const 0x101)) (if (then (local.set $cur (i32.rem_u (i32.add (local.get $cur) (if (result i32) (i32.eq (local.get $phase) (i32.const 2)) (then (i32.const 1)) (else (i32.const 2)))) (if (result i32) (i32.eq (local.get $phase) (i32.const 2)) (then (i32.const 2)) (else (i32.const 3))))) (br $input)))
-      (i32.and (i32.eq (local.get $phase) (i32.const 1)) (i32.eq (local.get $k) (i32.const 32))) (if (then (local.set $mask (i32.xor (local.get $mask) (i32.shl (i32.const 1) (local.get $cur)))) (br $input)))
-      (i32.eq (local.get $k) (i32.const 0x10d)) (if (then
-        (local.get $phase) (i32.const 0) (i32.eq) (if (then (local.set $env (local.get $cur)) (local.set $phase (i32.const 1)) (local.set $cur (i32.const 0)) (br $input)))
-        (local.get $phase) (i32.const 1) (i32.eq) (if (then (local.get $mask) (i32.eqz) (if (then (br $input))) (local.set $phase (i32.const 2)) (local.set $cur (i32.const 0)) (br $input)))
-        (local.get $cur) (i32.eqz) (if (then (call $done (local.get $env) (local.get $mask)))) (call $cancel)))
-      (br $input)) (unreachable))
+  ;; --- application logic, ordinary Core WAT -----------------------------
+  (core module $main
+    (import "env" "memory" (memory 2))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    (import "wasi" "exit-with-code" (func $exit (param i32)))
+    (import "term" "available" (func $available (result i32)))
+    (import "term" "enter" (func $enter (result i32)))
+    (import "term" "exit" (func $leave))
+    (import "term" "clear" (func $clear))
+    (import "term" "move-to" (func $move_to (param i32 i32)))
+    (import "term" "size" (func $size (param i32)))
+    (import "term" "read-key" (func $read_key (result i32)))
+    (import "provider" "columns" (func $columns (param i32 i32) (result i32)))
 
-  ;; Non-overlapping data. Lengths are UTF-8 byte counts (ANSI included).
-  (data (i32.const 0x1000) "\1b[1;36m◆ Project setup\1b[0m")
-  (data (i32.const 0x1030) "\1b[2mArrows move · Space toggles · Enter selects\1b[0m")
-  (data (i32.const 0x1070) "\1b[1mChoose an environment\1b[0m")
-  (data (i32.const 0x10a0) "\1b[1mSelect one or more features\1b[0m")
-  (data (i32.const 0x10d0) "\1b[2mSelect at least one feature\1b[0m")
-  (data (i32.const 0x1110) "\1b[1mCreate this project?\1b[0m")
-  (data (i32.const 0x1200) "dev") (data (i32.const 0x1203) "staging") (data (i32.const 0x120a) "prod")
-  (data (i32.const 0x1210) "workers") (data (i32.const 0x1217) "tls") (data (i32.const 0x121a) "metrics")
-  (data (i32.const 0x1221) "Yes, create it") (data (i32.const 0x1230) "No, cancel setup")
-  (data (i32.const 0x1300) "◆ Created configuration for ") (data (i32.const 0x1320) "Cancelled.\n")
-  (data (i32.const 0x1340) " | features ") (data (i32.const 0x1350) ", ") (data (i32.const 0x1360) "\n")
-  (data (i32.const 0x1380) "interactive terminal required; use examples/prompts for pipes\n")
-  (data (i32.const 0x13d0) "terminal must be at least 46 columns x 14 rows\n")
-  (data (i32.const 0x1400) "    ") (data (i32.const 0x1410) "\1b[32m[x] ")
-  (data (i32.const 0x1420) "\1b[1;36m> [x] ") (data (i32.const 0x1430) "\1b[1;36m> ") (data (i32.const 0x1440) "\1b[0m")
+    (global $SIZE i32 (i32.const 0x100))
+    (global $RET i32 (i32.const 0x200))
+    ;; `get-stdout` hands out an owned stream on every call, so a redraw loop
+    ;; that asked per write would leak one handle per line. Ask once.
+    (global $out (mut i32) (i32.const -1))
+
+    ;; @data 0x1000..0x2000
+    (data $title "\1b[1;36m◆ Project setup\1b[0m")
+    (data $help "\1b[2mArrows move · Space toggles · Enter selects\1b[0m")
+    (data $ask_env "\1b[1mChoose an environment\1b[0m")
+    (data $ask_feature "\1b[1mSelect one or more features\1b[0m")
+    (data $need_feature "\1b[2mSelect at least one feature\1b[0m")
+    (data $ask_confirm "\1b[1mCreate this project?\1b[0m")
+    (data $dev "dev")
+    (data $staging "staging")
+    (data $prod "prod")
+    (data $workers "workers")
+    (data $tls "tls")
+    (data $metrics "metrics")
+    (data $yes "Yes, create it")
+    (data $no "No, cancel setup")
+    (data $created "◆ Created configuration for ")
+    (data $cancelled "Cancelled.\n")
+    (data $features " | features ")
+    (data $comma ", ")
+    (data $nl "\n")
+    (data $need_tty "interactive terminal required; use examples/prompts for pipes\n")
+    (data $too_small "terminal must be at least 46 columns x 14 rows\n")
+    ;; The four option prefixes: plain, checked, selected, selected+checked.
+    (data $unselected "    ")
+    (data $checked "\1b[32m[x] ")
+    (data $selected "\1b[1;36m> ")
+    (data $selected_checked "\1b[1;36m> [x] ")
+    (data $reset "\1b[0m")
+
+    (func $p (param $ptr i32) (param $len i32)
+      (call $write (global.get $out)
+        (local.get $ptr) (local.get $len) (global.get $RET)))
+    (func $at (param $x i32) (param $y i32) (param $ptr i32) (param $len i32)
+      (call $move_to (local.get $x) (local.get $y))
+      (call $p (local.get $ptr) (local.get $len)))
+
+    ;; The prefix for one option row. Multi-value keeps the choice in one
+    ;; place: a caller never learns which segment it drew.
+    (func $prefix (param $selected i32) (param $checked i32) (result i32 i32)
+      (if (local.get $selected)
+        (then
+          (if (local.get $checked)
+            (then (return (global.get $selected_checked.ptr)
+                          (global.get $selected_checked.len)))
+            (else (return (global.get $selected.ptr)
+                          (global.get $selected.len))))))
+      (if (local.get $checked)
+        (then (return (global.get $checked.ptr) (global.get $checked.len))))
+      (global.get $unselected.ptr) (global.get $unselected.len))
+
+    (func $opt (param $x i32) (param $y i32)
+      (param $selected i32) (param $checked i32)
+      (param $label i32) (param $len i32)
+      (local $ptr i32) (local $plen i32)
+      (call $prefix (local.get $selected) (local.get $checked))
+      (local.set $plen) (local.set $ptr)
+      (call $at (local.get $x) (local.get $y) (local.get $ptr) (local.get $plen))
+      (call $p (local.get $label) (local.get $len))
+      (call $p (global.get $reset.ptr) (global.get $reset.len)))
+
+    ;; The label of environment $env, as (ptr, len).
+    (func $env_label (param $env i32) (result i32 i32)
+      (if (i32.eqz (local.get $env))
+        (then (return (global.get $dev.ptr) (global.get $dev.len))))
+      (if (i32.eq (local.get $env) (i32.const 1))
+        (then (return (global.get $staging.ptr) (global.get $staging.len))))
+      (global.get $prod.ptr) (global.get $prod.len))
+
+    ;; phase: 0 environment, 1 features, 2 confirm. cursor is 0..2 except in
+    ;; confirm, where it is 0..1. mask is the three feature bits.
+    (func $draw (param $phase i32) (param $cur i32) (param $mask i32)
+      (param $x i32) (param $y i32) (param $title_x i32)
+      (call $clear)
+      (call $at (local.get $title_x) (local.get $y)
+        (global.get $title.ptr) (global.get $title.len))
+      (call $at (local.get $x) (i32.add (local.get $y) (i32.const 2))
+        (global.get $help.ptr) (global.get $help.len))
+      (if (i32.eqz (local.get $phase))
+        (then
+          (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4))
+            (global.get $ask_env.ptr) (global.get $ask_env.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6))
+            (i32.eqz (local.get $cur)) (i32.const 0)
+            (global.get $dev.ptr) (global.get $dev.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7))
+            (i32.eq (local.get $cur) (i32.const 1)) (i32.const 0)
+            (global.get $staging.ptr) (global.get $staging.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 8))
+            (i32.eq (local.get $cur) (i32.const 2)) (i32.const 0)
+            (global.get $prod.ptr) (global.get $prod.len))))
+      (if (i32.eq (local.get $phase) (i32.const 1))
+        (then
+          (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4))
+            (global.get $ask_feature.ptr) (global.get $ask_feature.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6))
+            (i32.eqz (local.get $cur)) (i32.and (local.get $mask) (i32.const 1))
+            (global.get $workers.ptr) (global.get $workers.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7))
+            (i32.eq (local.get $cur) (i32.const 1))
+            (i32.and (local.get $mask) (i32.const 2))
+            (global.get $tls.ptr) (global.get $tls.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 8))
+            (i32.eq (local.get $cur) (i32.const 2))
+            (i32.and (local.get $mask) (i32.const 4))
+            (global.get $metrics.ptr) (global.get $metrics.len))
+          (call $at (local.get $x) (i32.add (local.get $y) (i32.const 11))
+            (global.get $need_feature.ptr) (global.get $need_feature.len))))
+      (if (i32.eq (local.get $phase) (i32.const 2))
+        (then
+          (call $at (local.get $x) (i32.add (local.get $y) (i32.const 4))
+            (global.get $ask_confirm.ptr) (global.get $ask_confirm.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 6))
+            (i32.eqz (local.get $cur)) (i32.const 0)
+            (global.get $yes.ptr) (global.get $yes.len))
+          (call $opt (local.get $x) (i32.add (local.get $y) (i32.const 7))
+            (i32.eq (local.get $cur) (i32.const 1)) (i32.const 0)
+            (global.get $no.ptr) (global.get $no.len)))))
+
+    (func $cancel
+      (call $leave)
+      (call $p (global.get $cancelled.ptr) (global.get $cancelled.len))
+      (call $exit (i32.const 1)) (unreachable))
+
+    (func $done (param $env i32) (param $mask i32)
+      (local $ptr i32) (local $len i32)
+      (call $leave)
+      (call $p (global.get $created.ptr) (global.get $created.len))
+      (call $env_label (local.get $env))
+      (local.set $len) (local.set $ptr)
+      (call $p (local.get $ptr) (local.get $len))
+      (call $p (global.get $features.ptr) (global.get $features.len))
+      (if (i32.and (local.get $mask) (i32.const 1))
+        (then
+          (call $p (global.get $workers.ptr) (global.get $workers.len))
+          (if (i32.gt_u (local.get $mask) (i32.const 1))
+            (then (call $p (global.get $comma.ptr) (global.get $comma.len))))))
+      (if (i32.and (local.get $mask) (i32.const 2))
+        (then
+          (call $p (global.get $tls.ptr) (global.get $tls.len))
+          (if (i32.and (local.get $mask) (i32.const 4))
+            (then (call $p (global.get $comma.ptr) (global.get $comma.len))))))
+      (if (i32.and (local.get $mask) (i32.const 4))
+        (then (call $p (global.get $metrics.ptr) (global.get $metrics.len))))
+      (call $p (global.get $nl.ptr) (global.get $nl.len))
+      (call $exit (i32.const 0)) (unreachable))
+
+    ;; Every path out leaves through `exit-with-code`, so the `result` this
+    ;; declares is never produced: the trailing `unreachable` is the whole
+    ;; return path, and it satisfies any result type.
+    (func (export "run") (result i32)
+      (local $cols i32) (local $rows i32)
+      (local $x i32) (local $y i32) (local $tx i32)
+      (local $phase i32) (local $cur i32) (local $mask i32)
+      (local $env i32) (local $k i32) (local $wrap i32)
+      (global.set $out (call $get_stdout))
+      (if (i32.eqz (call $available))
+        (then
+          (call $p (global.get $need_tty.ptr) (global.get $need_tty.len))
+          (call $exit (i32.const 2)) (unreachable)))
+      (if (i32.eqz (call $enter))
+        (then (call $exit (i32.const 2)) (unreachable)))
+      (call $size (global.get $SIZE))
+      (local.set $cols (i32.load (global.get $SIZE)))
+      (local.set $rows (i32.load (i32.add (global.get $SIZE) (i32.const 4))))
+      (if (i32.or (i32.lt_u (local.get $cols) (i32.const 46))
+                  (i32.lt_u (local.get $rows) (i32.const 14)))
+        (then
+          (call $clear)
+          (call $at (i32.const 0) (i32.const 0)
+            (global.get $too_small.ptr) (global.get $too_small.len))
+          (call $leave)
+          (call $exit (i32.const 2)) (unreachable)))
+      (local.set $x (i32.shr_u (i32.sub (local.get $cols) (i32.const 40))
+                      (i32.const 1)))
+      (local.set $y (i32.shr_u (i32.sub (local.get $rows) (i32.const 14))
+                      (i32.const 1)))
+      ;; The provider answers the title's real column count: its ANSI styling
+      ;; costs nothing and its `◆` costs one, so neither the 28 bytes nor the
+      ;; 24 characters would center it.
+      (local.set $tx
+        (i32.shr_u
+          (i32.sub (local.get $cols)
+            (call $columns (global.get $title.ptr) (global.get $title.len)))
+          (i32.const 1)))
+      (loop $input
+        (call $draw (local.get $phase) (local.get $cur) (local.get $mask)
+          (local.get $x) (local.get $y) (local.get $tx))
+        (local.set $k (call $read_key))
+        ;; Confirm offers two rows; every other phase offers three.
+        (local.set $wrap
+          (if (result i32) (i32.eq (local.get $phase) (i32.const 2))
+            (then (i32.const 2)) (else (i32.const 3))))
+        ;; Esc or Ctrl-C.
+        (if (i32.or (i32.eq (local.get $k) (i32.const 0x11b))
+                    (i32.eq (local.get $k) (i32.const 3)))
+          (then (call $cancel)))
+        ;; Down.
+        (if (i32.eq (local.get $k) (i32.const 0x102))
+          (then
+            (local.set $cur
+              (i32.rem_u (i32.add (local.get $cur) (i32.const 1))
+                (local.get $wrap)))
+            (br $input)))
+        ;; Up: one short of a full turn, so the remainder stays non-negative.
+        (if (i32.eq (local.get $k) (i32.const 0x101))
+          (then
+            (local.set $cur
+              (i32.rem_u
+                (i32.add (local.get $cur)
+                  (i32.sub (local.get $wrap) (i32.const 1)))
+                (local.get $wrap)))
+            (br $input)))
+        ;; Space toggles a feature bit, and only in the feature phase.
+        (if (i32.and (i32.eq (local.get $phase) (i32.const 1))
+                     (i32.eq (local.get $k) (i32.const 32)))
+          (then
+            (local.set $mask
+              (i32.xor (local.get $mask)
+                (i32.shl (i32.const 1) (local.get $cur))))
+            (br $input)))
+        ;; Enter advances, and in confirm either finishes or cancels.
+        (if (i32.eq (local.get $k) (i32.const 0x10d))
+          (then
+            (if (i32.eqz (local.get $phase))
+              (then
+                (local.set $env (local.get $cur))
+                (local.set $phase (i32.const 1))
+                (local.set $cur (i32.const 0))
+                (br $input)))
+            (if (i32.eq (local.get $phase) (i32.const 1))
+              (then
+                ;; At least one feature, or the phase does not advance.
+                (br_if $input (i32.eqz (local.get $mask)))
+                (local.set $phase (i32.const 2))
+                (local.set $cur (i32.const 0))
+                (br $input)))
+            (if (i32.eqz (local.get $cur))
+              (then (call $done (local.get $env) (local.get $mask))))
+            (call $cancel)))
+        (br $input))
+      (unreachable)))
+
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))
+    (with "term" (instance $host-term))
+    (with "provider" (instance $prov))))
+
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
 )

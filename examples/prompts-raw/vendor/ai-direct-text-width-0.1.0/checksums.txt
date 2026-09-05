@@ -1,0 +1,1 @@
+623110d784e6d73d6db4a20f2e876b438c808c32a12df4fbc68bcb41a5e5afc9  artifacts/wasm32-wasi/text-width.component.wasm
