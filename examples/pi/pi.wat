@@ -17,7 +17,8 @@
 ;; Memory map (2 pages = 128 KiB):
 ;;   0..7    scratch              16: write result   32: read result
 ;;   64..127 input buffer
-;;   1024..  static strings       4096..  spigot array A (i32 each, max 3341)
+;;   1024..4096 `;; @data` region: `air` places the strings
+;;   4096..  spigot array A (i32 each, max 3341)
 ;;   20000.. digit stream buffer  22000.. final output line
 ;;   32768.. canonical ABI bump allocation
 
@@ -35,9 +36,10 @@
 
   (global $out_idx (mut i32) (i32.const 0))
 
-  (data $prompt (i32.const 1024) "Enter digits (0-1000): ")
-  (data $invalid (i32.const 1088) "Invalid input: enter a number 0-1000\n")
-  (data $three (i32.const 1200) "3\n")
+  ;; @data 1024..4096
+  (data $prompt "Enter digits (0-1000): ")
+  (data $invalid "Invalid input: enter a number 0-1000\n")
+  (data $three "3\n")
 
   ;; write_fd(fd, ptr, len): 1 is stdout, anything else is stderr.
   ;; The stream result lands at 16 and is ignored, as the errno was before.

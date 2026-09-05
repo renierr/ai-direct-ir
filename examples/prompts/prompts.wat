@@ -11,7 +11,9 @@
 ;; available here. ANSI output would work: it is just bytes.
 ;;
 ;; Memory map: 0x08 write result, 0x0C bytes read, 0x10 read result,
-;; 0x100 input line (256B), 0x200 parked name, 0x1000+ read-only strings,
+;; 0x100 input line (256B), 0x200 parked name,
+;; 0x1000..0x8000 `;; @data` region: `air` places the strings and derives
+;; every .ptr/.len, so no address or length is written by hand,
 ;; 0x8000+ canonical ABI bump allocation
 
 (component
@@ -206,38 +208,38 @@
   (func (export "run") (result i32)
     (local $n i32) (local $v i32) (local $mask i32)
     (local $np i32) (local $nl i32) (local $ep i32) (local $el i32)
-    (call $print (i32.const 0x1000) (i32.const 35))   ;; intro
+    (call $print (global.get $intro.ptr) (global.get $intro.len))   ;; intro
     ;; --- text: project name, empty = default ---
-    (call $print (i32.const 0x1023) (i32.const 28))
+    (call $print (global.get $ask-name.ptr) (global.get $ask-name.len))
     (local.set $n (call $read_line))
     (local.get $n) (i32.const 0) (i32.lt_s)
-    (if (then (call $abort (i32.const 0x113C) (i32.const 25) (i32.const 2))))
+    (if (then (call $abort (global.get $input-closed.ptr) (global.get $input-closed.len) (i32.const 2))))
     (local.get $n) (i32.eqz)
     (if
       (then
-        (local.set $np (i32.const 0x1174))
-        (local.set $nl (i32.const 6)))
+        (local.set $np (global.get $default-name.ptr))
+        (local.set $nl (global.get $default-name.len)))
       (else
         ;; park the name at 0x200: the 0x100 line buffer is reused
         ;; by every later prompt and would clobber it before $exit.
         (memory.copy (i32.const 0x200) (i32.const 0x100) (local.get $n))
         (local.set $np (i32.const 0x200))
         (local.set $nl (local.get $n))))
-    (call $print (i32.const 0x103F) (i32.const 10))
+    (call $print (global.get $label-name.ptr) (global.get $label-name.len))
     (call $print (local.get $np) (local.get $nl))
-    (call $print (i32.const 0x110A) (i32.const 1))
+    (call $print (global.get $newline.ptr) (global.get $newline.len))
     ;; --- select: environment 1-3 ---
-    (call $print (i32.const 0x1049) (i32.const 27))
-    (call $print (i32.const 0x1064) (i32.const 9))
-    (call $print (i32.const 0x106D) (i32.const 13))
-    (call $print (i32.const 0x107A) (i32.const 10))
+    (call $print (global.get $ask-env.ptr) (global.get $ask-env.len))
+    (call $print (global.get $env-1.ptr) (global.get $env-1.len))
+    (call $print (global.get $env-2.ptr) (global.get $env-2.len))
+    (call $print (global.get $env-3.ptr) (global.get $env-3.len))
     (block $envok
       (loop $env
-        (call $print (i32.const 0x1084) (i32.const 2))
+        (call $print (global.get $prompt.ptr) (global.get $prompt.len))
         (local.set $n (call $read_line))
         (local.get $n) (i32.const 0) (i32.lt_s)
         (if (then
-          (call $abort (i32.const 0x113C) (i32.const 25) (i32.const 2))))
+          (call $abort (global.get $input-closed.ptr) (global.get $input-closed.len) (i32.const 2))))
         (local.set $v
           (call $parse_uint (i32.const 0x100) (local.get $n)))
         (i32.and
@@ -245,62 +247,62 @@
           (i32.le_u (local.get $v) (i32.const 3)))
         (if
           (then
-            (local.set $ep (i32.const 0x1155))
-            (local.set $el (i32.const 3))
+            (local.set $ep (global.get $dev.ptr))
+            (local.set $el (global.get $dev.len))
             (local.get $v) (i32.const 2) (i32.eq)
             (if (then
-              (local.set $ep (i32.const 0x1158))
-              (local.set $el (i32.const 7))))
+              (local.set $ep (global.get $staging.ptr))
+              (local.set $el (global.get $staging.len))))
             (local.get $v) (i32.const 3) (i32.eq)
             (if (then
-              (local.set $ep (i32.const 0x115F))
-              (local.set $el (i32.const 4))))
+              (local.set $ep (global.get $prod.ptr))
+              (local.set $el (global.get $prod.len))))
             (br $envok)))
-        (call $print (i32.const 0x1086) (i32.const 12))
+        (call $print (global.get $env-range.ptr) (global.get $env-range.len))
         (br $env)))
-    (call $print (i32.const 0x1092) (i32.const 9))
+    (call $print (global.get $label-env.ptr) (global.get $label-env.len))
     (call $print (local.get $ep) (local.get $el))
-    (call $print (i32.const 0x110A) (i32.const 1))
+    (call $print (global.get $newline.ptr) (global.get $newline.len))
     ;; --- multiselect: features, at least one ---
-    (call $print (i32.const 0x109B) (i32.const 41))
-    (call $print (i32.const 0x10C4) (i32.const 13))
-    (call $print (i32.const 0x10D1) (i32.const 9))
-    (call $print (i32.const 0x10DA) (i32.const 13))
+    (call $print (global.get $ask-features.ptr) (global.get $ask-features.len))
+    (call $print (global.get $feat-1.ptr) (global.get $feat-1.len))
+    (call $print (global.get $feat-2.ptr) (global.get $feat-2.len))
+    (call $print (global.get $feat-3.ptr) (global.get $feat-3.len))
     (block $fok
       (loop $f
-        (call $print (i32.const 0x1084) (i32.const 2))
+        (call $print (global.get $prompt.ptr) (global.get $prompt.len))
         (local.set $n (call $read_line))
         (local.get $n) (i32.const 0) (i32.lt_s)
         (if (then
-          (call $abort (i32.const 0x113C) (i32.const 25) (i32.const 2))))
+          (call $abort (global.get $input-closed.ptr) (global.get $input-closed.len) (i32.const 2))))
         (local.set $mask
           (call $parse_mask (i32.const 0x100) (local.get $n)))
         (i32.and
           (i32.ge_s (local.get $mask) (i32.const 0))
           (i32.ne (local.get $mask) (i32.const 0)))
         (if (then (br $fok)))
-        (call $print (i32.const 0x10E7) (i32.const 31))
+        (call $print (global.get $feat-hint.ptr) (global.get $feat-hint.len))
         (br $f)))
     (local.get $mask) (i32.const 1) (i32.and)
     (if (then
-      (call $print (i32.const 0x1106) (i32.const 4))
-      (call $print (i32.const 0x1163) (i32.const 7))
-      (call $print (i32.const 0x110A) (i32.const 1))))
+      (call $print (global.get $bullet.ptr) (global.get $bullet.len))
+      (call $print (global.get $workers.ptr) (global.get $workers.len))
+      (call $print (global.get $newline.ptr) (global.get $newline.len))))
     (local.get $mask) (i32.const 2) (i32.and)
     (if (then
-      (call $print (i32.const 0x1106) (i32.const 4))
-      (call $print (i32.const 0x116A) (i32.const 3))
-      (call $print (i32.const 0x110A) (i32.const 1))))
+      (call $print (global.get $bullet.ptr) (global.get $bullet.len))
+      (call $print (global.get $tls.ptr) (global.get $tls.len))
+      (call $print (global.get $newline.ptr) (global.get $newline.len))))
     (local.get $mask) (i32.const 4) (i32.and)
     (if (then
-      (call $print (i32.const 0x1106) (i32.const 4))
-      (call $print (i32.const 0x116D) (i32.const 7))
-      (call $print (i32.const 0x110A) (i32.const 1))))
+      (call $print (global.get $bullet.ptr) (global.get $bullet.len))
+      (call $print (global.get $metrics.ptr) (global.get $metrics.len))
+      (call $print (global.get $newline.ptr) (global.get $newline.len))))
     ;; --- confirm ---
-    (call $print (i32.const 0x110B) (i32.const 21))
+    (call $print (global.get $ask-continue.ptr) (global.get $ask-continue.len))
     (local.set $n (call $read_line))
     (local.get $n) (i32.const 0) (i32.lt_s)
-    (if (then (call $abort (i32.const 0x113C) (i32.const 25) (i32.const 2))))
+    (if (then (call $abort (global.get $input-closed.ptr) (global.get $input-closed.len) (i32.const 2))))
     ;; yes = first byte y/Y; empty or anything else = no
     (local.set $v (i32.const 0))
     (local.get $n) (i32.const 0) (i32.gt_u)
@@ -311,46 +313,47 @@
       (if (then (local.set $v (i32.const 1))))))
     (local.get $v) (i32.eqz)
     (if (then
-      (call $print (i32.const 0x1120) (i32.const 14))
+      (call $print (global.get $cancelled.ptr) (global.get $cancelled.len))
       (call $exit (i32.const 1))
       (unreachable)))
     ;; --- outro summary ---
-    (call $print (i32.const 0x112E) (i32.const 10))
+    (call $print (global.get $done.ptr) (global.get $done.len))
     (call $print (local.get $np) (local.get $nl))
-    (call $print (i32.const 0x1138) (i32.const 4))
+    (call $print (global.get $on.ptr) (global.get $on.len))
     (call $print (local.get $ep) (local.get $el))
-    (call $print (i32.const 0x110A) (i32.const 1))
+    (call $print (global.get $newline.ptr) (global.get $newline.len))
     (i32.const 0))
 
-  (data (i32.const 0x1000) "◆ prompts demo — project setup\n")
-  (data (i32.const 0x1023) "◇ Project name? [my-app]: ")
-  (data (i32.const 0x103F) "◆ name: ")
-  (data (i32.const 0x1049) "◇ Environment? (number):\n")
-  (data (i32.const 0x1064) "  1) dev\n")
-  (data (i32.const 0x106D) "  2) staging\n")
-  (data (i32.const 0x107A) "  3) prod\n")
-  (data (i32.const 0x1084) "> ")
-  (data (i32.const 0x1086) "  enter 1-3\n")
-  (data (i32.const 0x1092) "◆ env: ")
-  (data (i32.const 0x109B) "◇ Features? (comma-separated numbers):\n")
-  (data (i32.const 0x10C4) "  1) workers\n")
-  (data (i32.const 0x10D1) "  2) tls\n")
-  (data (i32.const 0x10DA) "  3) metrics\n")
-  (data (i32.const 0x10E7) "  pick at least one (e.g. 1,3)\n")
-  (data (i32.const 0x1106) "  + ")
-  (data (i32.const 0x110A) "\n")
-  (data (i32.const 0x110B) "◇ Continue? (y/N): ")
-  (data (i32.const 0x1120) "✖ Cancelled.\n")
-  (data (i32.const 0x112E) "◆ Done: ")
-  (data (i32.const 0x1138) " on ")
-  (data (i32.const 0x113C) "input closed, aborting.\n")
-  (data (i32.const 0x1155) "dev")
-  (data (i32.const 0x1158) "staging")
-  (data (i32.const 0x115F) "prod")
-  (data (i32.const 0x1163) "workers")
-  (data (i32.const 0x116A) "tls")
-  (data (i32.const 0x116D) "metrics")
-  (data (i32.const 0x1174) "my-app")
+  ;; @data 0x1000..0x8000
+  (data $intro "◆ prompts demo — project setup\n")
+  (data $ask-name "◇ Project name? [my-app]: ")
+  (data $label-name "◆ name: ")
+  (data $ask-env "◇ Environment? (number):\n")
+  (data $env-1 "  1) dev\n")
+  (data $env-2 "  2) staging\n")
+  (data $env-3 "  3) prod\n")
+  (data $prompt "> ")
+  (data $env-range "  enter 1-3\n")
+  (data $label-env "◆ env: ")
+  (data $ask-features "◇ Features? (comma-separated numbers):\n")
+  (data $feat-1 "  1) workers\n")
+  (data $feat-2 "  2) tls\n")
+  (data $feat-3 "  3) metrics\n")
+  (data $feat-hint "  pick at least one (e.g. 1,3)\n")
+  (data $bullet "  + ")
+  (data $newline "\n")
+  (data $ask-continue "◇ Continue? (y/N): ")
+  (data $cancelled "✖ Cancelled.\n")
+  (data $done "◆ Done: ")
+  (data $on " on ")
+  (data $input-closed "input closed, aborting.\n")
+  (data $dev "dev")
+  (data $staging "staging")
+  (data $prod "prod")
+  (data $workers "workers")
+  (data $tls "tls")
+  (data $metrics "metrics")
+  (data $default-name "my-app")
   )
 
   (core instance $app (instantiate $main
