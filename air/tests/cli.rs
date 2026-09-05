@@ -712,3 +712,117 @@ fn errors_below_a_generated_boundary_keep_their_line() {
     let message = stderr(&built);
     assert!(message.contains("app.wat"), "{message}");
 }
+
+/// Replace the scaffold's placed segment with unplaced ones and hand the
+/// harness a region to put them in.
+fn use_data_region(project: &Path, region: &str, segments: &str) {
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    let placed = "    (data $msg (i32.const 0x100) \"hello from app\\n\")";
+    assert!(source.contains(placed), "scaffold segment not found");
+    std::fs::write(
+        &root,
+        source.replace(placed, &format!("    ;; @data {region}\n{segments}")),
+    )
+    .expect("write root wat");
+}
+
+/// The other hand-maintained number: an author who declares a region stops
+/// assigning addresses, and inserting a word into one string no longer moves
+/// every string after it.
+#[test]
+fn unplaced_segments_are_packed_into_the_declared_region() {
+    let project = scaffold_target("data-region", "component");
+    use_data_region(
+        &project,
+        "0x1000..0x8000",
+        "    (data $msg \"hello from app\\n\")\n    (data $tail \"and one more line\\n\")",
+    );
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    std::fs::write(
+        &root,
+        source.replace(
+            "      (i32.load (i32.const 0x200)))",
+            "      (call $write (call $get-stdout)\n\
+             \x20       (global.get $tail.ptr) (global.get $tail.len) (i32.const 0x200))\n\
+             \x20     (i32.load (i32.const 0x200)))",
+        ),
+    )
+    .expect("write root wat");
+
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
+    // Packed in source order, so both strings print whole and in order.
+    assert_eq!(stdout(&ran), "hello from app\nand one more line\n");
+}
+
+/// A placed segment keeps its address; the region is the part handed over.
+#[test]
+fn placed_and_unplaced_segments_coexist() {
+    let project = scaffold_target("data-mixed", "component");
+    use_data_region(
+        &project,
+        "0x1000",
+        "    (data $msg \"hello from app\\n\")\n    (data $fixed (i32.const 0x400) \"fixed\")",
+    );
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
+    assert_eq!(stdout(&ran), "hello from app\n");
+}
+
+/// Without a region the harness will not guess at an address, because the
+/// author is already using memory it cannot see.
+#[test]
+fn an_unplaced_segment_without_a_region_is_rejected() {
+    let project = scaffold_target("data-no-region", "component");
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    std::fs::write(
+        &root,
+        source.replace("(data $msg (i32.const 0x100) ", "(data $msg "),
+    )
+    .expect("write root wat");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "must not guess an address");
+    let message = stderr(&built);
+    assert!(message.contains("@data"), "{message}");
+    assert!(message.contains("$msg"), "{message}");
+}
+
+/// Overrunning the region is an error, not silent corruption of whatever the
+/// author put after it.
+#[test]
+fn a_region_too_small_for_its_segments_is_rejected() {
+    let project = scaffold_target("data-overflow", "component");
+    use_data_region(
+        &project,
+        "0x1000..0x1005",
+        "    (data $msg \"hello from app\\n\")",
+    );
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "must not overrun the region");
+    let message = stderr(&built);
+    assert!(message.contains("does not fit"), "{message}");
+}
+
+/// A region that runs into a placed segment is reported against both.
+#[test]
+fn a_region_over_a_placed_segment_is_rejected() {
+    let project = scaffold_target("data-collision", "component");
+    use_data_region(
+        &project,
+        "0x400",
+        "    (data $msg \"hello from app\\n\")\n    (data $fixed (i32.const 0x404) \"fixed\")",
+    );
+
+    let built = run(&project, &["build"]);
+    assert!(
+        !built.status.success(),
+        "must not place over a fixed segment"
+    );
+    let message = stderr(&built);
+    assert!(message.contains("$fixed"), "{message}");
+}
