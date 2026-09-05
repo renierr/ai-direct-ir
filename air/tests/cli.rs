@@ -656,6 +656,32 @@ fn the_wasi_directive_imports_only_the_requested_capabilities() {
     assert_eq!(stdout(&ran), "hello from app\n");
 }
 
+/// `filesystem` derives the whole `wasi:filesystem` boundary from the
+/// vendored WIT: the artifact imports both interfaces with nothing
+/// hand-transcribed, and the component still links and runs.
+#[test]
+fn the_wasi_directive_derives_filesystem_from_wit() {
+    let project = scaffold_target("wasi-filesystem", "component");
+    set_wasi_directive(&project, "stdout filesystem");
+
+    let built = run(&project, &["build"]);
+    assert!(built.status.success(), "build failed: {}", stderr(&built));
+    let bytes = std::fs::read(project.join("app.wasm")).expect("read artifact");
+    let names = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(
+        names.contains("wasi:filesystem/types@"),
+        "filesystem was requested"
+    );
+    assert!(
+        names.contains("wasi:filesystem/preopens@"),
+        "preopens comes with filesystem"
+    );
+
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
+    assert_eq!(stdout(&ran), "hello from app\n");
+}
+
 /// A misspelled capability stops the build and names the line that asked for
 /// it, rather than silently generating a boundary without it.
 #[test]

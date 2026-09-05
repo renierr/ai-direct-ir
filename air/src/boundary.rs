@@ -16,6 +16,12 @@
 //!   "env" (instance $mem))`
 //! - `$wasi` — the core instance of lowered imports, instantiate the app `(with
 //!   "wasi" (instance $wasi))`
+//! - `$fs` — the core instance of lowered `wasi:filesystem` imports, when the
+//!   application asks for `filesystem` on its `;; @wasi` line. Instantiate the
+//!   app `(with "fs" (instance $fs))` and import short names such as
+//!   `"open-at"` and `"get-directories"`. Every type and signature in `$fs`
+//!   is generated from the vendored WASI WIT (see `wit.rs`); only these
+//!   instance names are harness ABI.
 //!
 //! `$wasi` exports one Core function per requested capability: `get-stdin`,
 //! `read`, `get-stdout`, `get-stderr`, `write`, `exit`, `exit-with-code`.
@@ -44,13 +50,17 @@ pub struct Boundary {
     exit: bool,
     exit_with_code: bool,
     args: bool,
+    filesystem: bool,
 }
 
 impl Boundary {
     /// True when any capability needs `wasi:io/streams`. `exit` alone does not,
     /// so a component that only exits imports neither streams nor io/error.
+    /// `filesystem` needs the stream resources (`read-via-stream` returns an
+    /// `input-stream`), so it implies the types even when no stdio capability
+    /// asked for the methods.
     fn streams(&self) -> bool {
-        self.stdin || self.stdout || self.stderr
+        self.stdin || self.stdout || self.stderr || self.filesystem
     }
 
     /// True when an output stream is in play; stdout and stderr share it.
@@ -62,8 +72,9 @@ impl Boundary {
 /// Parse the argument list of `;; @wasi <args>`.
 ///
 /// Arguments are capability names (`stdin`, `stdout`, `stderr`, `exit`,
-/// `exit-with-code`) and settings (`pages=<n>`, `heap=<addr>`). Order does not
-/// matter and an unknown word is an error rather than a silently ignored typo.
+/// `exit-with-code`, `filesystem`) and settings (`pages=<n>`, `heap=<addr>`).
+/// Order does not matter and an unknown word is an error rather than a
+/// silently ignored typo.
 pub fn parse(args: &str) -> Result<Boundary> {
     let mut boundary = Boundary {
         pages: DEFAULT_PAGES,
@@ -74,6 +85,7 @@ pub fn parse(args: &str) -> Result<Boundary> {
         exit: false,
         exit_with_code: false,
         args: false,
+        filesystem: false,
     };
     for word in args.split_whitespace() {
         match word.split_once('=') {
@@ -91,11 +103,12 @@ pub fn parse(args: &str) -> Result<Boundary> {
                 "exit" => boundary.exit = true,
                 "exit-with-code" => boundary.exit_with_code = true,
                 "args" => boundary.args = true,
+                "filesystem" => boundary.filesystem = true,
                 other => {
                     return Err(wasmtime::Error::msg(format!(
                         "unknown `@wasi` capability `{other}`; \
                          expected `stdin`, `stdout`, `stderr`, `exit`, \
-                         `exit-with-code` or `args`"
+                         `exit-with-code`, `args` or `filesystem`"
                     )));
                 }
             },
@@ -118,8 +131,9 @@ fn number(value: &str, setting: &str) -> Result<u32> {
 }
 
 /// Emit the boundary. The result is ordinary WAT that an author could have
-/// written; nothing here is privileged.
-pub fn emit(boundary: &Boundary) -> String {
+/// written; nothing here is privileged. The filesystem imports are derived
+/// from the vendored WASI WIT on every emit, so this can fail.
+pub fn emit(boundary: &Boundary) -> Result<String> {
     let mut out = String::new();
     out.push_str(
         "  ;; --- WASI 0.2 boundary, generated from `;; @wasi` --------------------\n\
@@ -130,14 +144,26 @@ pub fn emit(boundary: &Boundary) -> String {
         emit_streams(boundary, &mut out);
     }
     emit_cli(boundary, &mut out);
+    let filesystem = if boundary.filesystem {
+        let generated = crate::wit::filesystem()?;
+        out.push_str(&generated.wat);
+        Some(generated.lowers)
+    } else {
+        None
+    };
     emit_memory(boundary, &mut out);
-    emit_lowering(boundary, &mut out);
-    out
+    emit_lowering(boundary, filesystem.as_deref(), &mut out);
+    Ok(out)
 }
 
 /// `wasi:io/error` and `wasi:io/streams`, carrying only the resources and
-/// methods the requested capabilities use.
+/// methods the requested capabilities use. `filesystem` needs both stream
+/// resources (`read-via-stream` returns an `input-stream`), so it implies
+/// the types even when no stdio capability asked for the methods.
 fn emit_streams(boundary: &Boundary, out: &mut String) {
+    // Resources the boundary itself declares. Filesystem methods name both.
+    let input = boundary.stdin || boundary.filesystem;
+    let output = boundary.output() || boundary.filesystem;
     out.push_str(&format!(
         "  (import \"wasi:io/error@{VERSION}\" (instance $io-error\n\
          \x20   (export \"error\" (type (sub resource)))))\n\
@@ -145,10 +171,10 @@ fn emit_streams(boundary: &Boundary, out: &mut String) {
          \x20 (import \"wasi:io/streams@{VERSION}\" (instance $streams\n\
          \x20   (export \"error\" (type $ie (eq $error)))\n"
     ));
-    if boundary.stdin {
+    if input {
         out.push_str("    (export \"input-stream\" (type $is (sub resource)))\n");
     }
-    if boundary.output() {
+    if output {
         out.push_str("    (export \"output-stream\" (type $os (sub resource)))\n");
     }
     // The signatures below must name `$sexp`, the *exported* id, not `$se`.
@@ -176,12 +202,16 @@ fn emit_streams(boundary: &Boundary, out: &mut String) {
             "  (alias export $streams \"input-stream\" (type $istream))\n\
              \x20 (alias export $streams \"[method]input-stream.blocking-read\" (func $read))\n",
         );
+    } else if boundary.filesystem {
+        out.push_str("  (alias export $streams \"input-stream\" (type $istream))\n");
     }
     if boundary.output() {
         out.push_str(
             "  (alias export $streams \"output-stream\" (type $ostream))\n\
              \x20 (alias export $streams \"[method]output-stream.blocking-write-and-flush\" (func $write))\n",
         );
+    } else if boundary.filesystem {
+        out.push_str("  (alias export $streams \"output-stream\" (type $ostream))\n");
     }
     out.push('\n');
 }
@@ -268,10 +298,15 @@ fn emit_memory(boundary: &Boundary, out: &mut String) {
     ));
 }
 
-/// Lower each import into a Core function and gather them into `$wasi`.
-/// Functions that move lists across the boundary need memory and realloc;
-/// handle-only and empty ones do not.
-fn emit_lowering(boundary: &Boundary, out: &mut String) {
+/// Lower each import into a Core function and gather them into `$wasi` — and,
+/// when the application asked for `filesystem`, into `$fs`. Functions that
+/// move lists across the boundary need memory and realloc; handle-only and
+/// empty ones do not.
+fn emit_lowering(
+    boundary: &Boundary,
+    filesystem: Option<&[crate::wit::FsLower]>,
+    out: &mut String,
+) {
     let mut lowered: Vec<(&str, &str, bool)> = Vec::new();
     if boundary.stdin {
         lowered.push(("get-stdin", "$get-stdin", false));
@@ -311,6 +346,27 @@ fn emit_lowering(boundary: &Boundary, out: &mut String) {
         out.push_str(&format!("    (export \"{name}\" (func ${name}-l))\n"));
     }
     out.push_str("  )\n");
+    if let Some(filesystem) = filesystem {
+        for lower in filesystem {
+            let extra = if lower.needs_memory {
+                " (memory $memory) (realloc $realloc)"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "  (core func {}-l (canon lower (func {}){extra}))\n",
+                lower.func, lower.func
+            ));
+        }
+        out.push_str("  (core instance $fs\n");
+        for lower in filesystem {
+            out.push_str(&format!(
+                "    (export \"{}\" (func {}-l))\n",
+                lower.export, lower.func
+            ));
+        }
+        out.push_str("  )\n");
+    }
 }
 
 #[cfg(test)]
@@ -346,24 +402,24 @@ mod tests {
     /// program that wants a status code asks for `exit-with-code` instead.
     #[test]
     fn exit_and_exit_with_code_are_separate_capabilities() {
-        let only_exit = emit(&parse("exit").unwrap());
+        let only_exit = emit(&parse("exit").unwrap()).unwrap();
         assert!(only_exit.contains("(export \"exit\" (func (param \"status\" (result))))"));
         assert!(!only_exit.contains("exit-with-code"), "{only_exit}");
 
-        let both = emit(&parse("exit exit-with-code").unwrap());
+        let both = emit(&parse("exit exit-with-code").unwrap()).unwrap();
         assert!(both.contains("(export \"exit-with-code\" (func (param \"status-code\" u8)))"));
         // One interface instance carries both functions.
         assert_eq!(both.matches("wasi:cli/exit@").count(), 1);
         assert!(both.contains("$exit-l") && both.contains("$exit-with-code-l"));
 
-        let only_code = emit(&parse("exit-with-code").unwrap());
+        let only_code = emit(&parse("exit-with-code").unwrap()).unwrap();
         assert!(only_code.contains("exit-with-code"));
         assert!(!only_code.contains("(export \"exit\" (func"), "{only_code}");
     }
 
     #[test]
     fn exit_alone_needs_no_stream_interfaces() {
-        let text = emit(&parse("exit").unwrap());
+        let text = emit(&parse("exit").unwrap()).unwrap();
         assert!(!text.contains("wasi:io/streams"), "{text}");
         assert!(!text.contains("wasi:io/error"), "{text}");
         assert!(text.contains("wasi:cli/exit"));
@@ -371,7 +427,7 @@ mod tests {
 
     #[test]
     fn stdout_and_stderr_share_one_output_stream() {
-        let text = emit(&parse("stdout stderr").unwrap());
+        let text = emit(&parse("stdout stderr").unwrap()).unwrap();
         assert_eq!(
             text.matches("(export \"output-stream\" (type $os").count(),
             1
@@ -384,8 +440,38 @@ mod tests {
     /// the exported id, never the local type it was defined from.
     #[test]
     fn signatures_reference_the_exported_stream_error_id() {
-        let text = emit(&parse("stdin stdout").unwrap());
+        let text = emit(&parse("stdin stdout").unwrap()).unwrap();
         assert!(text.contains("(error $sexp)"), "{text}");
         assert!(!text.contains("(error $se)"), "{text}");
+    }
+
+    /// `filesystem` derives the whole `wasi:filesystem` boundary from the
+    /// vendored WIT: the 37-case `error-code` enum and every method signature
+    /// arrive without transcription, and `$fs` carries the lowered functions.
+    #[test]
+    fn filesystem_comes_from_wit_not_transcription() {
+        let text = emit(&parse("stdout filesystem").unwrap()).unwrap();
+        assert!(text.contains("wasi:filesystem/types@0.2.12"), "{text}");
+        assert!(text.contains("wasi:filesystem/preopens@0.2.12"), "{text}");
+        // The enum the hand-written boundary transcribed case by case.
+        assert!(text.contains("\"cross-device\""), "{text}");
+        assert!(text.contains("\"not-permitted\""), "{text}");
+        // Methods lower into `$fs` under their short names.
+        assert!(text.contains("(export \"open-at\" (func $"), "{text}");
+        assert!(
+            text.contains("(export \"get-directories\" (func $"),
+            "{text}"
+        );
+        assert!(text.contains("(core instance $fs"), "{text}");
+    }
+
+    #[test]
+    fn filesystem_without_stdio_still_imports_stream_types() {
+        // `read-via-stream` returns an `input-stream`: the resource types must
+        // exist even when no stdio capability asked for the methods.
+        let text = emit(&parse("filesystem").unwrap()).unwrap();
+        assert!(text.contains("wasi:io/streams@"), "{text}");
+        assert!(text.contains("wasi:filesystem/types@"), "{text}");
+        assert!(!text.contains("wasi:cli/stdout@"), "{text}");
     }
 }

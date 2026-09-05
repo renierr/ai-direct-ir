@@ -9,6 +9,7 @@ mod link;
 mod manifest;
 mod net;
 mod term;
+mod wit;
 
 use wasmtime::{Engine, Result};
 

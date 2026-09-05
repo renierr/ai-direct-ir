@@ -8,9 +8,11 @@
 ;; provider package built from the RustCrypto sha2 crate; this file is argument
 ;; handling, file reading, and output.
 ;;
-;; The wasi:filesystem imports below are hand-written on purpose. Nothing in
-;; `air` knows the word "filesystem": the harness links the whole WASI 0.2 set,
-;; so a new interface needs a declaration here, not a change there.
+;; The wasi:filesystem boundary below is generated from WIT, not transcribed:
+;; `filesystem` on the `;; @wasi` line derives every type and signature from
+;; `air/wit/wasi-0.2.12/filesystem.wit`. Nothing in `air` hardcodes the word
+;; "filesystem" beyond wiring that file: the harness links the whole WASI 0.2
+;; set, so a new interface needs a declaration here, not a change there.
 ;;
 ;; Memory map (17 pages): 0x200 write result, 0x300 digest result,
 ;;   0x400 stream read result, 0x500 arguments, 0x600 preopens,
@@ -19,60 +21,8 @@
 ;;   0x40000+ canonical ABI bump allocation
 
 (component
-  ;; @wasi stdin stdout stderr args exit-with-code pages=17 heap=0x40000
+  ;; @wasi stdin stdout stderr args exit-with-code filesystem pages=17 heap=0x40000
   ;; @data 0x1000..0x2000
-
-  ;; --- wasi:filesystem, declared by hand ---------------------------------
-  ;; `descriptor` belongs to wasi:filesystem/types. Declaring a fresh resource
-  ;; in preopens would be a different type and the linker rejects it.
-  (import "wasi:filesystem/types@0.2.12" (instance $types
-    (export "descriptor" (type $d (sub resource)))
-    (export "input-stream" (type (eq $istream)))
-    (type $ec (enum
-      "access" "would-block" "already" "bad-descriptor" "busy" "deadlock"
-      "quota" "exist" "file-too-large" "illegal-byte-sequence" "in-progress"
-      "interrupted" "invalid" "io" "is-directory" "loop" "too-many-links"
-      "message-size" "name-too-long" "no-device" "no-entry" "no-lock"
-      "insufficient-memory" "insufficient-space" "not-directory" "not-empty"
-      "not-recoverable" "unsupported" "no-tty" "no-such-device" "overflow"
-      "not-permitted" "pipe" "read-only" "invalid-seek" "text-file-busy"
-      "cross-device"))
-    (export "error-code" (type $ecx (eq $ec)))
-    (type $pf (flags "symlink-follow"))
-    (export "path-flags" (type $pfx (eq $pf)))
-    (type $of (flags "create" "directory" "exclusive" "truncate"))
-    (export "open-flags" (type $ofx (eq $of)))
-    (type $df (flags "read" "write" "file-integrity-sync" "data-integrity-sync"
-                     "requested-write-sync" "mutate-directory"))
-    (export "descriptor-flags" (type $dfx (eq $df)))
-    (export "[method]descriptor.open-at"
-      (func (param "self" (borrow $d)) (param "path-flags" $pfx)
-            (param "path" string) (param "open-flags" $ofx)
-            (param "flags" $dfx)
-            (result (result (own $d) (error $ecx)))))
-    (export "[method]descriptor.read-via-stream"
-      (func (param "self" (borrow $d)) (param "offset" u64)
-            (result (result (own $istream) (error $ecx)))))))
-  (alias export $types "descriptor" (type $descriptor))
-  (alias export $types "[method]descriptor.open-at" (func $open-at))
-  (alias export $types "[method]descriptor.read-via-stream" (func $read-via-stream))
-
-  (import "wasi:filesystem/preopens@0.2.12" (instance $pre
-    (export "descriptor" (type (eq $descriptor)))
-    (export "get-directories"
-      (func (result (list (tuple (own $descriptor) string)))))))
-  (alias export $pre "get-directories" (func $get-dirs))
-
-  (core func $open-at-l
-    (canon lower (func $open-at) (memory $memory) (realloc $realloc)))
-  (core func $read-via-stream-l
-    (canon lower (func $read-via-stream) (memory $memory) (realloc $realloc)))
-  (core func $get-dirs-l
-    (canon lower (func $get-dirs) (memory $memory) (realloc $realloc)))
-  (core instance $fs
-    (export "open-at" (func $open-at-l))
-    (export "read-via-stream" (func $read-via-stream-l))
-    (export "get-directories" (func $get-dirs-l)))
 
   ;; --- the provider, imported like any other interface --------------------
   (import "ai-direct:sha256/digest@0.1.0" (instance $sha

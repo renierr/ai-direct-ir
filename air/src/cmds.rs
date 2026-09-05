@@ -484,7 +484,8 @@ fn expand_wasi(
     }
     let boundary = crate::boundary::parse(args)
         .map_err(|error| wasmtime::Error::msg(format!("{}:{line}: {error}", file.display())))?;
-    let text = crate::boundary::emit(&boundary);
+    let text = crate::boundary::emit(&boundary)
+        .map_err(|error| wasmtime::Error::msg(format!("{}:{line}: {error}", file.display())))?;
     for generated in text.lines() {
         expanded.text.push_str(generated);
         expanded.text.push('\n');

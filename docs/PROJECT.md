@@ -174,7 +174,9 @@ does not say why. One directive replaces all of it:
 Capabilities are `stdin`, `stdout`, `stderr`, `exit` and `exit-with-code`.
 `exit` takes a `result`, so 0 and 1 are the only representable values and it
 says only whether the run failed; `exit-with-code` takes a `u8` for a
-POSIX-style status. `pages=` (default 1)
+POSIX-style status. `filesystem` imports the whole `wasi:filesystem/types`
+plus `wasi:filesystem/preopens`, derived from the vendored WASI WIT rather
+than transcribed (see below). `pages=` (default 1)
 sizes the memory and `heap=` (default `0x8000`) places the canonical ABI bump
 allocator above the application's fixed addresses. An unknown word is an error,
 not a silent omission, and a second directive is rejected rather than left to
@@ -182,7 +184,9 @@ fail as a duplicate identifier in generated text.
 
 `air` emits only what was asked for: `exit` alone pulls in neither
 `wasi:io/streams` nor `wasi:io/error`, and `stdout` with `stderr` share one
-output stream and one lowered `write`. The generated names are the boundary's
+output stream and one lowered `write`. `filesystem` implies the stream
+*resources* (`read-via-stream` returns an `input-stream`) without the
+read/write *methods*. The generated names are the boundary's
 ABI, so the application can rely on them:
 
 | Name | What it is |
@@ -190,6 +194,7 @@ ABI, so the application can rely on them:
 | `$mem` | core instance exporting `memory` — `(with "env" (instance $mem))` |
 | `$wasi` | core instance of lowered imports — `(with "wasi" (instance $wasi))` |
 | `$memory` / `$realloc` | the memory and its bump allocator, for lowering further imports |
+| `$fs` | core instance of lowered `wasi:filesystem` imports — `(with "fs" (instance $fs))`, short names such as `"open-at"` and `"get-directories"` |
 
 `$wasi` exports one Core function per capability: `get-stdin`, `read`,
 `get-stdout`, `get-stderr`, `write`, `exit`. Everything below the directive is
@@ -198,6 +203,26 @@ ordinary Core WAT.
 Every generated line reports the directive as its origin, so a validator
 complaint about the boundary points at the line the author wrote rather than at
 text they never saw.
+
+### The Boundary From WIT
+
+The shorthand above stopped at hand-picked capabilities until `filesystem`
+proved the next step: `air` parses the vendored WASI 0.2.12 WIT
+(`air/wit/wasi-0.2.12/`, copied from `wasmtime-wasi 48`) with `wit-parser`
+and emits the `wasi:filesystem/types` and `wasi:filesystem/preopens`
+imports from it — every enum case, flag, record, variant, resource, and all
+thirty method signatures — plus the aliases, canonical lowerings, and the
+`$fs` instance. Only the instance names (`$fs-types`, `$fs`, ...) are
+harness ABI; every type and signature is the WIT's.
+
+Converting `examples/sha256sum/sha256sum.wat` deleted 51 hand-transcribed
+lines for one directive word, `filesystem`, with no change to the
+application's `"fs"` imports and a byte-identical digest. The emitter
+(`air/src/wit.rs`) is generic over resources, records, variants, enums,
+flags, tuples, options, results, lists, borrows, and owns; teaching `;; @wasi`
+another interface is vendoring its WIT and wiring one entry point, not
+transcribing it. Provider WIT (`ai-direct:sha256/digest`) and the remaining
+WASI interfaces still wait for the same treatment.
 
 Converting the four component sources removed 208 lines and changed no
 behavior:
@@ -247,7 +272,11 @@ Unit tests cover the module scanner, address parsing, and byte-length decoding.
 Every example manifest now declares its `source`, so the tracked `.wasm` is
 rebuilt from the tracked `.wat` instead of drifting from it. `hello`, `pi`, and
 `server` were re-verified after that rebuild, including `POST /sha256` against
-`sha256sum`.
+`sha256sum`. `sha256sum` has since dropped its 51-line hand-transcribed
+`wasi:filesystem` block for `;; @wasi ... filesystem`: the boundary is
+generated from the vendored WIT, the digest still matches `sha256sum` byte
+for byte, and unit tests pin the 37-case `error-code` enum plus the `$fs`
+lowerings while `air/tests/cli.rs` pins the end-to-end import, link, and run.
 
 Fresh native, browser, and GUI scaffolds have completed their applicable
 `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
@@ -544,11 +573,11 @@ compatibility layer.
 Ordered so that each step is provable on its own, and so the catalog stops
 being specification-only before more specification is written.
 
-1. Generate the boundary from an interface's own WIT instead of hardcoding
-   capability words in `;; @wasi`. The WIT ships with Wasmtime, and
-   `examples/sha256sum/` shows what hand-transcribing one costs: a 37-case enum
-   and three flags types. This is the step that stops the shorthand from
-   growing per interface. See What Actually Needs A Harness Change.
+1. Extend the WIT-driven boundary to the remaining interfaces and provider
+    contracts. `filesystem` is generated from the vendored WASI WIT; sockets,
+    clocks, and the catalog's provider WIT still go through hand-written
+    declarations. This is the step that stops the shorthand from growing per
+    interface. See What Actually Needs A Harness Change.
 2. Continue up the memory ladder: records with named fields, then an
    allocator. Segment addresses are handled (see Harness-Placed Segments), but
    an application with dynamic collections needs both, and neither should be
