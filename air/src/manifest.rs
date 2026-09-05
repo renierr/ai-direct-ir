@@ -26,10 +26,12 @@ pub enum Mode {
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Target {
-    Native,
+    /// Core WASM against the generated Canvas `web.*` host. Not linked in
+    /// Wasmtime at all -- the browser runtime implements its imports -- which
+    /// is why Core WASM outlived the native Preview 1 host.
     Browser,
-    /// WASM Component + WASI 0.2. A separate linking domain from the Core
-    /// targets above, so it shares the manifest and nothing else.
+    /// WASM Component + WASI 0.2. **The default**, and the only target the
+    /// harness itself hosts.
     Component,
 }
 
@@ -73,39 +75,6 @@ pub fn is_component_source(text: &str) -> bool {
         }
     }
     false
-}
-
-#[derive(Deserialize)]
-pub struct Lib {
-    pub path: String,
-    #[serde(rename = "as")]
-    pub namespace: String,
-}
-
-#[derive(Deserialize, Clone)]
-pub struct BridgeCall {
-    #[serde(rename = "as")]
-    pub name: String,
-    pub func: String,
-    pub in_ptr: usize,
-    pub in_len: usize,
-    pub out_ptr: usize,
-    pub out_len: u32,
-    #[serde(default = "default_max_in")]
-    pub max_in: u32,
-}
-
-fn default_max_in() -> u32 {
-    1 << 20
-}
-
-#[derive(Deserialize)]
-pub struct Bridge {
-    pub path: String,
-    #[serde(rename = "as")]
-    pub namespace: String,
-    pub alloc: String,
-    pub calls: Vec<BridgeCall>,
 }
 
 /// A component whose exports satisfy the application component's imports.
@@ -157,11 +126,6 @@ pub struct Manifest {
     pub port: Option<u16>,
     pub root: Option<String>,
     pub guest: Option<String>,
-    pub memory_pages: Option<u32>,
-    #[serde(default)]
-    pub libs: Vec<Lib>,
-    #[serde(default)]
-    pub bridges: Vec<Bridge>,
     #[serde(default)]
     pub providers: Vec<Provider>,
     #[serde(default)]
@@ -176,7 +140,25 @@ pub struct Manifest {
 
 impl Default for Target {
     fn default() -> Self {
-        Target::Native
+        Target::Component
+    }
+}
+
+/// Resolve a manifest-relative path, preferring the manifest's own directory
+/// and falling back to the process working directory. It lives here because
+/// every path in a manifest resolves this way, and it is what lets
+/// `air check srv/host.toml` work from the repository root and from `srv/`
+/// alike.
+pub fn join(base: &std::path::Path, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let via_manifest = base.join(path);
+    if via_manifest.exists() {
+        via_manifest
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -191,13 +173,13 @@ fn resolve_target(manifest: &Manifest, base: &std::path::Path) -> wasmtime::Resu
         .app
         .source
         .as_ref()
-        .and_then(|source| std::fs::read_to_string(crate::link::join(base, source)).ok())
+        .and_then(|source| std::fs::read_to_string(join(base, source)).ok())
         .map(|text| is_component_source(&text));
     let is_component = match from_source {
         Some(found) => Some(found),
         None => {
             let mut preamble = [0u8; 8];
-            match std::fs::File::open(crate::link::join(base, &manifest.app.path)) {
+            match std::fs::File::open(join(base, &manifest.app.path)) {
                 Ok(mut file) => {
                     use std::io::Read;
                     let read = file.read(&mut preamble).unwrap_or(0);
@@ -211,7 +193,9 @@ fn resolve_target(manifest: &Manifest, base: &std::path::Path) -> wasmtime::Resu
         // Evidence and declaration disagree: say so rather than fail later
         // inside the wrong linker.
         (Some(Target::Component), Some(false)) => Err(wasmtime::Error::msg(format!(
-            "manifest declares `target = \"component\"` but `{}` is a Core WASM module",
+            "manifest declares `target = \"component\"` but `{}` is a Core WASM module; \
+             author a `(component ...)` source, or lift the module with \
+             `wasm-tools component new`",
             manifest.app.path
         ))),
         (Some(declared), Some(true)) if declared != Target::Component => {
@@ -222,9 +206,19 @@ fn resolve_target(manifest: &Manifest, base: &std::path::Path) -> wasmtime::Resu
         }
         (Some(declared), _) => Ok(declared),
         (None, Some(true)) => Ok(Target::Component),
-        // A Core artifact can be hosted two ways, so `native` is the default
-        // and `browser` stays an explicit choice.
-        (None, _) => Ok(Target::Native),
+        // The harness hosts components and nothing else. A Core module can
+        // still be an application, but only in the browser, and that is a
+        // decision the manifest has to state rather than one to infer.
+        (None, Some(false)) => Err(wasmtime::Error::msg(format!(
+            "`{}` is a Core WASM module and no target claims it. The native \
+             Preview 1 host has retired: declare `target = \"browser\"`, or lift \
+             the module into a component with `wasm-tools component new` and \
+             consume it through `[[providers]]`.",
+            manifest.app.path
+        ))),
+        // Nothing built and nothing to read: a fresh project, which is a
+        // component unless it says otherwise.
+        (None, None) => Ok(Target::Component),
     }
 }
 

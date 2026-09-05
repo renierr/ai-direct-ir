@@ -42,9 +42,9 @@ secrets, generated output, and local provider caches out of source control.
   memory ownership are ABI, not incidental implementation details.
 - Changing a built-in host import? The harness repository's `docs/PROJECT.md`
   is the source of truth — consult the relevant section, not the whole file.
-  Add application dependencies as declared `[[libs]]` or `[[bridges]]`; their
-  namespaces and exports are project-owned. `air check` proves the complete
-  declared module graph links.
+  Add application dependencies as `[[providers]]` components; the WIT
+  interface is the contract. `air check` proves the complete declared graph
+  links.
 - Keep generated `.wasm` out of source control unless this application
   deliberately distributes it.
 - `.gitignore` excludes generated build output and the future `dist/` release

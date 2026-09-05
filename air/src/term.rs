@@ -1,9 +1,13 @@
-//! `term.*` syscalls: an explicit terminal capability for interactive apps.
+//! The terminal capability, offered to components as `ai-direct:host/term`.
 //!
-//! WASI preview1 has byte streams but no raw-mode, cursor, size, or key-event
-//! API. This module supplies that narrow host ABI through crossterm. It is
-//! deliberately separate from WASI: a batch command receives no terminal
-//! semantics unless it imports `term.*`.
+//! WASI has byte streams but no raw-mode, cursor, size, or key-event API.
+//! This module supplies that through crossterm. It is deliberately separate
+//! from WASI: a batch command receives no terminal semantics unless it
+//! imports the interface.
+//!
+//! Everything here is a plain function over a `bool`. The WIT shapes -- which
+//! calls answer `bool`, which answer nothing -- live in `component.rs`, next
+//! to the linker that declares them.
 
 use std::io::{IsTerminal, Write, stdin, stdout};
 
@@ -13,9 +17,7 @@ use crossterm::{
     execute,
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use wasmtime::{Caller, Result};
-
-use crate::host::Host;
+use wasmtime::Result;
 
 /// Key values returned by `term.read_key`. Printable ASCII returns itself.
 pub const KEY_UP: i32 = 0x101;
@@ -28,9 +30,9 @@ pub const KEY_BACKSPACE: i32 = 0x108;
 pub const KEY_TAB: i32 = 0x109;
 pub const KEY_CTRL_C: i32 = 0x003;
 
-/// Restore a terminal changed by the guest. Safe to call more than once.
-/// Takes the flag rather than a host so the Core and component hosts, which
-/// are different types, can share one implementation.
+/// Restore a terminal changed by the guest. Safe to call more than once, and
+/// called on the way out however the guest left -- a trap, a Ctrl-C, or a
+/// clean exit must never strand the user in raw mode.
 pub fn restore_flag(active: &mut bool) {
     if !*active {
         return;
@@ -38,10 +40,6 @@ pub fn restore_flag(active: &mut bool) {
     let _ = execute!(stdout(), Show, LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
     *active = false;
-}
-
-pub fn restore(host: &mut Host) {
-    restore_flag(&mut host.term_active);
 }
 
 pub fn enter(active: &mut bool) -> i32 {
@@ -59,27 +57,15 @@ pub fn enter(active: &mut bool) -> i32 {
     0
 }
 
-pub fn w_enter(mut caller: Caller<'_, Host>) -> i32 {
-    enter(&mut caller.data_mut().term_active)
-}
-
 /// 1 only when both streams are real terminals. Guests use this to retain a
 /// scriptable fallback for pipes, redirected files, and CI.
 pub fn available() -> i32 {
     i32::from(stdin().is_terminal() && stdout().is_terminal())
 }
 
-pub fn w_available(_caller: Caller<'_, Host>) -> i32 {
-    available()
-}
-
 pub fn exit(active: &mut bool) -> i32 {
     restore_flag(active);
     0
-}
-
-pub fn w_exit(mut caller: Caller<'_, Host>) -> i32 {
-    exit(&mut caller.data_mut().term_active)
 }
 
 pub fn clear(active: bool) -> i32 {
@@ -89,10 +75,6 @@ pub fn clear(active: bool) -> i32 {
     execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All)).map_or(-1, |_| 0)
 }
 
-pub fn w_clear(caller: Caller<'_, Host>) -> i32 {
-    clear(caller.data().term_active)
-}
-
 pub fn move_to(active: bool, x: i32, y: i32) -> i32 {
     if !active || x < 0 || y < 0 || x > u16::MAX as i32 || y > u16::MAX as i32 {
         return -1;
@@ -100,25 +82,13 @@ pub fn move_to(active: bool, x: i32, y: i32) -> i32 {
     execute!(stdout(), MoveTo(x as u16, y as u16)).map_or(-1, |_| 0)
 }
 
-pub fn w_move_to(caller: Caller<'_, Host>, x: i32, y: i32) -> i32 {
-    move_to(caller.data().term_active, x, y)
-}
-
 /// Packed terminal size: columns in high 16 bits, rows in low 16 bits; -1 error.
 pub fn size() -> i32 {
     terminal::size().map_or(-1, |(cols, rows)| ((cols as i32) << 16) | rows as i32)
 }
 
-pub fn w_size(_caller: Caller<'_, Host>) -> i32 {
-    size()
-}
-
 pub fn flush() -> i32 {
     stdout().flush().map_or(-1, |_| 0)
-}
-
-pub fn w_flush(_caller: Caller<'_, Host>) -> i32 {
-    flush()
 }
 
 pub fn read_key(active: bool) -> Result<i32> {
@@ -149,8 +119,4 @@ pub fn read_key(active: bool) -> Result<i32> {
         };
         return Ok(code);
     }
-}
-
-pub fn w_read_key(caller: Caller<'_, Host>) -> Result<i32> {
-    read_key(caller.data().term_active)
 }

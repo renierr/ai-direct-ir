@@ -1,9 +1,7 @@
-//! `air run` and `air serve`'s worker pool: linking a manifest and executing it.
+//! `air run`: linking a manifest and executing it.
 
 use wasmtime::{Engine, Result};
-use wasmtime_wasi::I32Exit;
 
-use crate::link::link_all;
 use crate::manifest::{Manifest, Mode, Target};
 
 use crate::fail;
@@ -41,30 +39,11 @@ pub fn run_manifest(engine: &Engine, path: &str, env: GuestEnv) -> Result<()> {
             "{path} targets a browser; build it, then serve its directory and open index.html"
         ));
     }
-    if manifest.target == Target::Component {
-        let base = manifest_base(path);
-        // `gui` differs from `command` only in who calls the entry point and
-        // how often: the linking, the grants and the WASI boundary are the
-        // same component path.
-        return match manifest.mode {
-            Mode::Gui => crate::gui::run(engine, &manifest, &base),
-            Mode::Command => crate::component::run(engine, &manifest, &base, &env),
-        };
-    }
     let base = manifest_base(path);
-    let mut linked = link_all(engine, &manifest, &base)?;
-    let func = linked
-        .app_inst
-        .get_func(&mut linked.store, &linked.run_name)
-        .ok_or_else(|| wasmtime::Error::msg(format!("app has no func {}", linked.run_name)))?;
-    match func.call(&mut linked.store, &[], &mut []) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            // WASI proc_exit surfaces as I32Exit: exit code, not crash.
-            if let Some(exit) = e.downcast_ref::<I32Exit>() {
-                std::process::exit(exit.0);
-            }
-            Err(e)
-        }
+    // `gui` differs from `command` only in who calls the entry point and how
+    // often: the linking, the grants and the WASI boundary are the same.
+    match manifest.mode {
+        Mode::Gui => crate::gui::run(engine, &manifest, &base),
+        Mode::Command => crate::component::run(engine, &manifest, &base, &env),
     }
 }

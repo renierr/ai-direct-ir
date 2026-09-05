@@ -18,14 +18,14 @@ pub fn print_help() {
             SetAttribute(Attribute::Reset),
             ResetColor,
             Print(format!(
-                " {} -- build, validate, and run native, browser, GUI, or component WASM projects\n",
+                " {} -- build, validate, and run component, GUI, or browser WASM projects\n",
                 env!("CARGO_PKG_VERSION")
             )),
         );
     } else {
         let _ = writeln!(
             out,
-            "air {} -- build, validate, and run native, browser, GUI, or component WASM projects",
+            "air {} -- build, validate, and run component, GUI, or browser WASM projects",
             env!("CARGO_PKG_VERSION")
         );
     }
@@ -46,7 +46,7 @@ pub fn print_help() {
         ),
         (
             "run [manifest.toml]",
-            "link and execute a native or component app; defaults to host.toml",
+            "link and execute a component; defaults to host.toml",
         ),
         (
             "serve [manifest.toml]",
@@ -62,12 +62,12 @@ pub fn print_help() {
             "show imports/exports for a prebuilt module",
         ),
         (
-            "init <app.wasm>",
-            "write a non-overwriting host.toml stub beside an app",
+            "init <app.component.wasm>",
+            "write a non-overwriting host.toml stub beside a component",
         ),
         (
             "new <name>",
-            "choose component, native, browser, or GUI; scaffold a project",
+            "choose component, browser, or GUI; scaffold a project",
         ),
         ("help, -h, --help", "this text"),
         ("version, -V, --version", "version"),
@@ -76,18 +76,18 @@ pub fn print_help() {
     }
     help_section(&mut out, color, "EXAMPLES");
     for (command, description) in [
-        ("air new myapp", "choose native, browser, GUI, or component"),
+        ("air new myapp", "choose component, browser, or GUI"),
         ("cd myapp && air build", ""),
         ("air check", "validate host.toml and the compiled app"),
         ("air dist", "create a shippable dist/ bundle"),
-        ("air run", "native or component project"),
+        ("air run", "component or GUI project"),
         ("air serve", "browser project"),
         (
             "air inspect external-lib.wasm",
             "inspect a prebuilt module's ABI",
         ),
         (
-            "air init existing-app.wasm",
+            "air init app.component.wasm",
             "write a host.toml stub beside it",
         ),
     ] {

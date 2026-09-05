@@ -6,8 +6,6 @@ native/gen/
 native/*-native
 air/target/
 dist/
-libs/**/target/
-libs/**/Cargo.lock
 *.o
 *.cwasm
 

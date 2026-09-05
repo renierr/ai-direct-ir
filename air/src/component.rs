@@ -15,8 +15,8 @@ use wasmtime::{Engine, Result, Store, StoreContextMut};
 use wasmtime_wasi::p2;
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use crate::link::join;
 use crate::manifest::Manifest;
+use crate::manifest::join;
 
 /// Store state for a component: the WASI 0.2 configuration plus the table that
 /// owns the streams, descriptors, and other handles the guest holds.
@@ -75,18 +75,12 @@ pub fn link_all(
     base: &Path,
     env: &crate::cmds::GuestEnv,
 ) -> Result<Linked> {
-    if !manifest.libs.is_empty() || !manifest.bridges.is_empty() {
-        return Err(wasmtime::Error::msg(
-            "a component app cannot declare [[libs]] or [[bridges]]: those are Core WASM \
-             mechanisms. Compose provider components instead.",
-        ));
-    }
     let path = join(base, &manifest.app.path);
     let bytes = std::fs::read(&path)?;
     if !crate::manifest::is_component_binary(&bytes) {
         return Err(wasmtime::Error::msg(format!(
-            "{} is a Core WASM module, not a component; \
-             use target = \"native\" or author a `(component ...)` source",
+            "{} is a Core WASM module, not a component; author a `(component ...)` \
+             source, or lift it with `wasm-tools component new`",
             path.display()
         )));
     }

@@ -102,9 +102,11 @@ A manifest does not have to declare `target`. The artifact's own preamble says
 whether it is a component (layer `0d 00`) or a Core module (`01 00`); declaring
 one that disagrees is an error rather than a confusing failure later.
 
-`target = "native"` (Core WASM on WASI Preview 1) remains supported, but no
-example uses it any more: every example in this repository is a WASI 0.2
-component. See `docs/PROJECT.md`.
+`target = "browser"` is the only other target: Core WASM against the generated
+Canvas host, which the browser runs rather than `air`. The native WASI Preview
+1 host has retired, so a prebuilt Core module from any language is lifted into
+a component with `wasm-tools component new` and consumed through
+`[[providers]]`. See `docs/PROJECT.md`.
 
 `mode` is a separate question from `target`: `command` enters the app once,
 `gui` opens a native window and calls the entry point once per drawn frame. A
@@ -127,8 +129,9 @@ components rather than one fused artifact, and resource handles do not cross
 the boundary; plain values do.
 
 A component may also import the project's own capabilities under a WIT
-interface name, exactly as it imports a WASI one. `ai-direct:host/term` offers
-the terminal capability that Core apps reach through `term.*`.
+interface name, exactly as it imports a WASI one: `ai-direct:host/term` for
+raw-mode terminals (`examples/prompts-raw/`) and `ai-direct:host/ui` for the
+egui window a `mode = "gui"` app draws into (`examples/gui-hello/`).
 
 `wasm-tools` remains useful only for checks the harness does not implement:
 
@@ -136,6 +139,7 @@ the terminal capability that Core apps reach through `term.*`.
 |---|---|
 | `wasm-tools validate` | Cross-check a Core WASM or Component artifact. |
 | `wasm-tools component wit` | Parse and validate a provider's WIT package. |
+| `wasm-tools component new` | Lift a prebuilt Core module from any language into a component, so `[[providers]]` can consume it. |
 | `wasm-tools component targets` | Confirm that a component implements the declared WIT world. |
 
 **Composition is an open decision, deliberately deferred.** The component text
@@ -154,7 +158,7 @@ WASI 0.2. It will not fetch providers at runtime or place any build tool in
 ## Build The Harness
 
 The project executable is `air`, the Rust harness that builds, validates,
-and runs native or browser WASM projects:
+and runs component or browser WASM projects:
 
 ```bash
 ./build.sh
@@ -168,10 +172,9 @@ the target and its linker to be installed separately.
 
 ## Layout
 
-- `air/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`host`/`link`/`cmds` modules)
+- `air/` — the harness (Rust; `src/main.rs` CLI + `manifest`/`component`/`boundary`/`wit`/`asm`/`cmds` modules)
 - `air/tests/cli.rs` — end-to-end tests that run the real binary
 - `examples/` — all WASI 0.2 components. Each manifest declares its `.wat` source, so the tracked `.wasm` is rebuilt from it
-- `libs/sha256/` and `libs/text-width/` — Rust crates wrapping crates.io `sha2` and `unicode-width`, for the Core `[[libs]]`/`[[bridges]]` path; no manifest references them now
 - `native/` — wasm2c experiments; `tools/` — retired Python host (reference); `docs/PROJECT.md` — living project state
 
 Start with `docs/PROJECT.md`. It is the living project documentation

@@ -56,9 +56,11 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// Scaffold a native project in a fresh directory and return the project dir.
+/// Scaffold a component project in a fresh directory and return the project
+/// dir. `component` is the default target and the only one the harness hosts,
+/// so it is what the assembler tests below build against.
 fn scaffold(name: &str) -> PathBuf {
-    scaffold_target(name, "native")
+    scaffold_target(name, "component")
 }
 
 /// Scaffold a project for `target` in a fresh directory and return its dir.
@@ -83,40 +85,25 @@ fn scaffold_target(name: &str, target: &str) -> PathBuf {
     dir.join("app")
 }
 
-/// Replace the root module's closing paren with an include of `fragment`.
+/// Add an include of `fragment` to the end of the starter's core module. The
+/// fragments below are core-level definitions, which is where an application
+/// splits its source; the component wrapper around them is the boundary.
 fn include_fragment(project: &Path, relative: &str, body: &str) {
     let root = project.join("app.wat");
     let source = std::fs::read_to_string(&root).expect("read root wat");
-    let trimmed = source.trim_end();
-    let module = trimmed
-        .strip_suffix(')')
-        .expect("root wat ends with the module's closing paren");
-    std::fs::write(&root, format!("{module}  ;; @include {relative}\n)\n"))
-        .expect("write root wat");
+    let close = "\n  )\n  (core instance $app";
+    let at = source.find(close).expect("starter closes its core module");
+    let patched = format!(
+        "{}\n    ;; @include {relative}{}",
+        &source[..at],
+        &source[at..]
+    );
+    std::fs::write(&root, patched).expect("write root wat");
     let fragment = project.join(relative);
     if let Some(parent) = fragment.parent() {
         std::fs::create_dir_all(parent).expect("create fragment dir");
     }
     std::fs::write(fragment, body).expect("write fragment");
-}
-
-#[test]
-fn scaffold_builds_checks_and_runs() {
-    let project = scaffold("scaffold");
-    let built = run(&project, &["build"]);
-    assert!(built.status.success(), "build failed: {}", stderr(&built));
-
-    let checked = run(&project, &["check"]);
-    assert!(
-        checked.status.success(),
-        "check failed: {}",
-        stderr(&checked)
-    );
-    assert!(stdout(&checked).contains("all imports satisfied"));
-
-    let ran = run(&project, &["run"]);
-    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
-    assert_eq!(stdout(&ran), "hello from app\n");
 }
 
 #[test]
@@ -728,20 +715,27 @@ fn write_app(project: &Path, wat: &str) {
     std::fs::write(project.join("app.wat"), wat).expect("write root wat");
 }
 
-/// A module that prints one named data segment, so its length is whatever the
-/// harness computed rather than whatever the author last typed.
+/// A component that prints one named data segment, so its length is whatever
+/// the harness computed rather than whatever the author last typed.
 fn printer(text: &str) -> String {
     format!(
-        r#"(module
-  (import "wasi_snapshot_preview1" "fd_write"
-    (func $fd_write (param i32 i32 i32 i32) (result i32)))
-  (memory 1)
-  (export "memory" (memory 0))
-  (func (export "_start")
-    (i32.store (i32.const 0) (global.get $msg.ptr))
-    (i32.store (i32.const 4) (global.get $msg.len))
-    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8))))
-  (data $msg (i32.const 0x1000) "{text}")
+        r#"(component
+  ;; @wasi stdout
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (import "wasi" "get-stdout" (func $get_stdout (result i32)))
+    (import "wasi" "write" (func $write (param i32 i32 i32 i32)))
+    (data $msg (i32.const 0x1000) "{text}")
+    (func (export "run") (result i32)
+      (call $write (call $get_stdout)
+        (global.get $msg.ptr) (global.get $msg.len) (i32.const 0x200))
+      (i32.load (i32.const 0x200))))
+  (core instance $app (instantiate $main
+    (with "env" (instance $mem))
+    (with "wasi" (instance $wasi))))
+  (func $run (result (result)) (canon lift (core func $app "run")))
+  (instance $run-i (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run-i))
 )
 "#
     )
@@ -779,10 +773,12 @@ fn overlapping_named_data_segments_are_rejected() {
     let project = scaffold("named-data-overlap");
     write_app(
         &project,
-        r#"(module
-  (memory 1)
-  (data $first (i32.const 0x1000) "0123456789")
-  (data $second (i32.const 0x1005) "collides")
+        r#"(component
+  ;; @wasi stdout
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (data $first (i32.const 0x1000) "0123456789")
+    (data $second (i32.const 0x1005) "collides"))
 )
 "#,
     );
@@ -796,10 +792,12 @@ fn named_data_requires_a_literal_offset() {
     let project = scaffold("named-data-offset");
     write_app(
         &project,
-        r#"(module
-  (memory 1)
-  (global $base i32 (i32.const 4096))
-  (data $msg (global.get $base) "x")
+        r#"(component
+  ;; @wasi stdout
+  (core module $main
+    (import "env" "memory" (memory 1))
+    (global $base i32 (i32.const 4096))
+    (data $msg (global.get $base) "x"))
 )
 "#,
     );
@@ -958,13 +956,41 @@ fn a_gui_project_is_a_component_checked_without_a_window() {
     assert!(report.contains("all imports satisfied"), "{report}");
 }
 
-/// There is no Core host for `ui.*` any more, so a frame loop over a Core
-/// module cannot be linked. Say so at the manifest rather than at an
-/// unresolved import.
+/// The harness hosts components and nothing else. A Core module can still be
+/// an application in the browser, but that is a decision the manifest has to
+/// state -- and the error has to say what to do about it, because the answer
+/// is a build step rather than a manifest key.
+#[test]
+fn a_core_module_has_no_host() {
+    let project = scaffold("core-no-host");
+    write_app(&project, "(module (func (export \"run\")))\n");
+    // Nothing declared, so nothing but the artifact can answer the question.
+    let manifest = project.join("host.toml");
+    let declared = std::fs::read_to_string(&manifest).expect("read manifest");
+    let without: String = declared
+        .lines()
+        .filter(|line| !line.starts_with("target"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&manifest, without).expect("write manifest");
+    let out = run(&project, &["check"]);
+    assert!(!out.status.success(), "a Core app must be rejected");
+    let message = stderr(&out);
+    assert!(message.contains("Core WASM module"), "{message}");
+    assert!(message.contains("target = \"browser\""), "{message}");
+    assert!(message.contains("wasm-tools component new"), "{message}");
+}
+
+/// A frame loop needs `ai-direct:host/ui`, which only a component can import.
+/// A manifest that pairs `mode = "gui"` with a Core target says so at load,
+/// not at an unresolved import.
 #[test]
 fn a_gui_manifest_needs_a_component() {
     let project = scaffold_target("gui-core-module", "gui");
     write_app(&project, "(module (func (export \"frame\")))\n");
+    let manifest = project.join("host.toml");
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(&manifest, format!("target = \"browser\"\n{text}")).expect("write manifest");
     let out = run(&project, &["check"]);
     assert!(!out.status.success(), "a Core GUI app must be rejected");
     assert!(

@@ -5,8 +5,6 @@ mod boundary;
 mod cmds;
 mod component;
 mod gui;
-mod host;
-mod link;
 mod manifest;
 mod term;
 mod wit;

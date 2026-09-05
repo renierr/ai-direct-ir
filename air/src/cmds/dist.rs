@@ -37,7 +37,6 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         "target".into(),
         toml::Value::String(
             match manifest.target {
-                Target::Native => "native",
                 Target::Browser => "browser",
                 Target::Component => "component",
             }
@@ -61,21 +60,8 @@ pub fn cmd_dist(path: &str) -> Result<()> {
     if manifest.network {
         manifest_out.insert("network".into(), toml::Value::Boolean(true));
     }
-    for (key, value) in [
-        (
-            "port",
-            manifest.port.map(|v| toml::Value::Integer(v.into())),
-        ),
-        (
-            "memory_pages",
-            manifest
-                .memory_pages
-                .map(|v| toml::Value::Integer(v.into())),
-        ),
-    ] {
-        if let Some(value) = value {
-            manifest_out.insert(key.into(), value);
-        }
+    if let Some(port) = manifest.port {
+        manifest_out.insert("port".into(), toml::Value::Integer(port.into()));
     }
     if let Some(root) = &manifest.root {
         // A `root` travels only if it is a directory the bundle can contain.
@@ -112,49 +98,10 @@ pub fn cmd_dist(path: &str) -> Result<()> {
             }
         }
     }
-    if matches!(manifest.target, Target::Native | Target::Component) {
-        let mut libs = Vec::new();
-        for lib in &manifest.libs {
-            let path = copy_bundle_file(&base, &dist, &lib.path)?;
-            let mut item = toml::Table::new();
-            item.insert("path".into(), toml::Value::String(path));
-            item.insert("as".into(), toml::Value::String(lib.namespace.clone()));
-            libs.push(toml::Value::Table(item));
-        }
-        if !libs.is_empty() {
-            manifest_out.insert("libs".into(), toml::Value::Array(libs));
-        }
-        let mut bridges = Vec::new();
-        for bridge in &manifest.bridges {
-            let path = copy_bundle_file(&base, &dist, &bridge.path)?;
-            let mut item = toml::Table::new();
-            item.insert("path".into(), toml::Value::String(path));
-            item.insert("as".into(), toml::Value::String(bridge.namespace.clone()));
-            item.insert("alloc".into(), toml::Value::String(bridge.alloc.clone()));
-            let calls = bridge
-                .calls
-                .iter()
-                .map(|call| {
-                    let mut call_out = toml::Table::new();
-                    call_out.insert("as".into(), toml::Value::String(call.name.clone()));
-                    call_out.insert("func".into(), toml::Value::String(call.func.clone()));
-                    call_out.insert("in_ptr".into(), toml::Value::Integer(call.in_ptr as i64));
-                    call_out.insert("in_len".into(), toml::Value::Integer(call.in_len as i64));
-                    call_out.insert("out_ptr".into(), toml::Value::Integer(call.out_ptr as i64));
-                    call_out.insert("out_len".into(), toml::Value::Integer(call.out_len.into()));
-                    call_out.insert("max_in".into(), toml::Value::Integer(call.max_in.into()));
-                    toml::Value::Table(call_out)
-                })
-                .collect();
-            item.insert("calls".into(), toml::Value::Array(calls));
-            bridges.push(toml::Value::Table(item));
-        }
-        if !bridges.is_empty() {
-            manifest_out.insert("bridges".into(), toml::Value::Array(bridges));
-        }
-        // A component's providers are part of the application the same way a
-        // Core lib is: the artifact does not contain them, it imports their
-        // interfaces, so a distribution without them cannot instantiate.
+    if manifest.target == Target::Component {
+        // A component's providers are part of the application: the artifact
+        // does not contain them, it imports their interfaces, so a
+        // distribution without them cannot instantiate.
         let mut providers = Vec::new();
         for provider in &manifest.providers {
             let path = copy_bundle_file(&base, &dist, &provider.path)?;
@@ -191,7 +138,6 @@ pub fn cmd_dist(path: &str) -> Result<()> {
     println!(
         "created {} distribution at {}",
         match manifest.target {
-            Target::Native => "native",
             Target::Browser => "browser",
             Target::Component if manifest.mode == crate::manifest::Mode::Gui => "GUI component",
             Target::Component => "component",

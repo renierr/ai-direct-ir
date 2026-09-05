@@ -2,56 +2,21 @@
 
 use wasmtime::{Engine, ExternType, Result};
 
-use crate::link::link_all;
 use crate::manifest::{Manifest, Target};
 
 use crate::fail;
 
 use super::build::build_if_needed;
-use super::{func_sig, manifest_base};
+use super::manifest_base;
 
-/// Validate a manifest end-to-end without executing: links everything and
-/// verifies the entry func signature.
+/// Validate a manifest end-to-end without executing.
 pub fn cmd_check(engine: &Engine, manifest_path: &str, manifest: &Manifest) -> Result<()> {
     build_if_needed(engine, manifest_path, manifest)?;
     let base = manifest_base(manifest_path);
-    if manifest.target == Target::Browser {
-        return check_browser(engine, manifest_path, manifest, &base);
+    match manifest.target {
+        Target::Browser => check_browser(engine, manifest_path, manifest, &base),
+        Target::Component => crate::component::check(engine, manifest_path, manifest, &base),
     }
-    if manifest.target == Target::Component {
-        return crate::component::check(engine, manifest_path, manifest, &base);
-    }
-    let linked = link_all(engine, manifest, &base)?;
-    let app_mod =
-        wasmtime::Module::from_file(engine, crate::link::join(&base, &manifest.app.path))?;
-    let found = app_mod.exports().find(|e| e.name() == linked.run_name);
-    match found {
-        Some(e) => match e.ty() {
-            ExternType::Func(f) => {
-                if f.params().len() == 0 && f.results().len() == 0 {
-                    println!("run `{}`: signature ok", linked.run_name);
-                } else {
-                    return fail(format!(
-                        "run `{}` has {}, want {}",
-                        linked.run_name,
-                        func_sig(&f),
-                        "(func  -> )"
-                    ));
-                }
-            }
-            _ => {
-                return fail(format!("run `{}` is not a func", linked.run_name));
-            }
-        },
-        None => {
-            return fail(format!(
-                "app {} has no export `{}`",
-                manifest.app.path, linked.run_name
-            ));
-        }
-    }
-    println!("check {manifest_path}: all modules linked, all imports satisfied");
-    Ok(())
 }
 
 /// Browser modules are checked against the browser host ABI, not linked in
@@ -65,10 +30,7 @@ fn check_browser(
     if !matches!(manifest.mode, crate::manifest::Mode::Command) {
         return fail("browser projects require mode = \"command\"".into());
     }
-    if !manifest.libs.is_empty() || !manifest.bridges.is_empty() {
-        return fail("browser projects do not support [[libs]] or [[bridges]] yet".into());
-    }
-    let app_path = crate::link::join(base, &manifest.app.path);
+    let app_path = crate::manifest::join(base, &manifest.app.path);
     let app = wasmtime::Module::from_file(engine, &app_path)?;
     let mut needs_frame = false;
     for import in app.imports() {

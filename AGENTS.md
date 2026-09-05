@@ -71,9 +71,10 @@ change.
 
 - One manifest per app, beside its modules, named `host.toml`. Paths resolve
   manifest-dir-first and travel with `air dist`.
-- `target = "component"` (WASI 0.2) for new work: it is the default and is
-  inferred from the artifact. `native` (Preview 1) only for Core providers or
-  a pointer-passing host ABI.
+- `target = "component"` (WASI 0.2) is the default and is inferred from the
+  artifact. `browser` is the only other one; the native Preview 1 host has
+  retired, so a prebuilt Core module is lifted with `wasm-tools component new`
+  and consumed through `[[providers]]`, never linked directly.
 - Nothing is reachable unless it asks. Directories: `root` / `[[dirs]]` in the
   manifest, `--dir` / `--dir-rw` from the shell, `write = true` for state.
   Sockets: `network = true` or `air run --net`. WASI has no global root, so an

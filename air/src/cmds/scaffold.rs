@@ -10,7 +10,6 @@ use crate::manifest::Manifest;
 #[derive(PartialEq, Eq)]
 enum Kind {
     Component,
-    Native,
     Browser,
     Gui,
 }
@@ -81,61 +80,10 @@ pub fn cmd_new(engine: &Engine, name: &str) -> Result<()> {
             return fail(format!("`{}` exists, refusing to overwrite", p.display()));
         }
     }
-    let hello = format!("hello from {name}\n");
     let (starter, manifest) = match target {
         Kind::Browser => browser_starter(name),
         Kind::Gui => gui_starter(name),
         Kind::Component => component_starter(name),
-        Kind::Native => {
-            let starter = format!(
-                ";; {name}.wat — {name} app, hosted by air.\n\
-         ;; Build: air build\n\
-         ;; Check: air check\n\
-         ;; Run:   air run\n\
-         ;;\n\
-         ;; Command-mode contract: own memory (export it for WASI),\n\
-         ;; WASI stdio, `_start` entry, `proc_exit` code is the exit code.\n\
-         ;; Need sockets, shared libs, or bridges? New needs go in the\n\
-         ;; manifest (TOML), never in harness code.\n\
-         ;;\n\
-         ;; A named data segment gets $name.ptr and $name.len from air.\n\
-         ;; Never write a string length by hand: it silently goes stale.\n\
-         \n\
-         (module\n\
-         \x20 (import \"wasi_snapshot_preview1\" \"fd_write\"\n\
-         \x20   (func $fd_write (param i32 i32 i32 i32) (result i32)))\n\
-         \x20 (import \"wasi_snapshot_preview1\" \"proc_exit\"\n\
-         \x20   (func $exit (param i32)))\n\
-         \x20 (memory 1)\n\
-         \x20 (export \"memory\" (memory 0))\n\
-         \n\
-         \x20 (func (export \"_start\")\n\
-         \x20   (i32.store (i32.const 0) (global.get $hello.ptr))\n\
-         \x20   (i32.store (i32.const 4) (global.get $hello.len))\n\
-         \x20   (call $fd_write (i32.const 1) (i32.const 0)\n\
-         \x20     (i32.const 1) (i32.const 8))\n\
-         \x20   (drop)\n\
-         \x20   (call $exit (i32.const 0))\n\
-         \x20   (unreachable))\n\
-         \n\
-         \x20 (data $hello (i32.const 0x1000) \"{hello}\")\n\
-         )\n",
-                name = name,
-                // WAT string syntax needs an escaped newline, not a literal one.
-                hello = hello.escape_default()
-            );
-            let manifest = format!(
-                "# {name}: command-mode app. Build, check, then run:\n\
-         #   air build && air check && air run\n\
-         mode = \"command\"\n\
-         \n\
-         [app]\n\
-         source = \"{name}.wat\"\n\
-         path = \"{name}.wasm\"\n\
-         run = \"_start\"\n"
-            );
-            (starter, manifest)
-        }
     };
     std::fs::create_dir_all(&src)?;
     std::fs::write(
@@ -245,7 +193,7 @@ fn project_doc(template: &str, name: &str, target: &Kind) -> String {
             "| `index.html` | The page containing the application canvas. |\n| `web-host.js` | Trusted browser runtime that implements the `web.*` imports. |",
             "The module exports `start()` (the `[app].run` entry). It may import only the\ndeclared `web.*` functions implemented in `web-host.js`: Canvas dimensions,\n`clear`, `fill_rect`, keyboard state, pointer coordinates, and frame scheduling.\nIf it imports `request_frame()`, it must export `frame()`. `web-host.js` owns\nbrowser events and drawing effects; WAT owns application state and behavior.",
             "Use `air serve` and test the result in a browser",
-            "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI, `term.*`, `[[libs]]`, or `[[bridges]]`: those are\n  native-target capabilities and browser validation rejects them.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
+            "- `web-host.js` is trusted application runtime, not generated glue to discard.\n  Keep its imports and the WAT imports in lockstep.\n- Do not import WASI or any host interface: browser validation rejects\n  everything but the declared `web.*` functions.\n- Keep rendering explicit through `web.*`; do not add arbitrary JavaScript\n  evaluation or DOM object handles as shortcuts.",
         )
     } else if *target == Kind::Gui {
         (
@@ -261,13 +209,13 @@ fn project_doc(template: &str, name: &str, target: &Kind) -> String {
         )
     } else {
         (
-            "native",
+            "component",
             "air run",
-            "`air run` executes the configured entry through the native host. It is\nnot a browser application and has no DOM or Canvas runtime. `air dist`\ncontains the `air` executable, a rewritten local `host.toml`, the app,\ndeclared WASM dependencies, and any configured `root` data directory.",
+            "`air run` links the component, applies the manifest's grants, and calls\nthe entry point. `air dist` contains the `air` executable, a rewritten local\n`host.toml`, the component, every declared provider, and any configured\n`root` data directory.",
             "",
-            "Command applications export `_start()` and can use declared WASI\nstdio/files and optional `term.*` terminal calls. Only imports implemented by\nthe native host and configured in `host.toml` are available. A network server\nis a component, not a native app: it owns its accept loop through\n`;; @wasi sockets`.",
-            "Run `air run` and exercise the expected CLI or server behavior",
-            "- `mode = \"command\"`: keep a plain stdio path; use `term.*` only after\n  checking `term.available` so pipes and CI still work.\n- Browser `web.*` imports, `index.html`, and `web-host.js` do not exist for this\n  target. A browser UI is a separate browser project.",
+            "The component exports `wasi:cli/run` (the `[app].run` entry). `;; @wasi`\ngenerates the WASI 0.2 boundary from the capabilities it names, narrowed by the\napplication's own imports. Nothing is reachable unless the manifest grants it:\ndirectories through `root`/`[[dirs]]`, sockets through `network = true`.",
+            "Run `air run` and exercise the expected CLI behavior",
+            "- Never hand-write the WASI boundary. `;; @wasi <capabilities>` generates the\n  imports, the shared memory and the canonical ABI lowering.\n- Depend on other components through `[[providers]]`, wired at link time. A\n  prebuilt Core module is not a dependency: lift it with `wasm-tools component\n  new` first.\n- `air check` links and instantiates the complete declared graph. An unresolved\n  import is an integration error, not a reason to add a harness API.",
         )
     };
     template
@@ -286,17 +234,16 @@ fn prompt_target() -> Result<Kind> {
     if io::stdin().is_terminal() && io::stdout().is_terminal() {
         return select_target();
     }
-    print!("target [component/native/browser/gui] (component): ");
+    print!("target [component/browser/gui] (component): ");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     match input.trim() {
         "" | "component" => Ok(Kind::Component),
-        "native" => Ok(Kind::Native),
         "browser" => Ok(Kind::Browser),
         "gui" => Ok(Kind::Gui),
         other => fail(format!(
-            "unknown target `{other}`: choose component, native, browser, or gui"
+            "unknown target `{other}`: choose component, browser, or gui"
         )),
     }
 }
@@ -328,10 +275,9 @@ fn select_target() -> Result<Kind> {
             Print("Create target (Up/Down, Enter):\r\n")
         )?;
         for (index, (name, description)) in [
-            ("Native", "WASI Preview 1, terminal, and WASM libraries"),
+            ("Component", "WASM component on WASI 0.2"),
             ("Browser", "Canvas application served to a web browser"),
             ("GUI", "Native egui desktop application"),
-            ("Component", "WASM component on WASI 0.2"),
         ]
         .iter()
         .enumerate()
@@ -365,14 +311,13 @@ fn select_target() -> Result<Kind> {
                 selected = selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                selected = (selected + 1).min(3);
+                selected = (selected + 1).min(2);
             }
             KeyCode::Enter => {
                 println!();
                 return Ok(match selected {
                     0 => Kind::Component,
-                    1 => Kind::Native,
-                    2 => Kind::Browser,
+                    1 => Kind::Browser,
                     _ => Kind::Gui,
                 });
             }
@@ -387,7 +332,7 @@ fn select_target() -> Result<Kind> {
             _ => continue,
         }
         let mut out = io::stdout();
-        execute!(out, MoveUp(6))
+        execute!(out, MoveUp(5))
             .map_err(|e| wasmtime::Error::msg(format!("terminal redraw: {e}")))?;
         draw(selected).map_err(|e| wasmtime::Error::msg(format!("terminal draw: {e}")))?;
     }
@@ -501,22 +446,30 @@ fn gui_starter(name: &str) -> (String, String) {
     (starter, manifest)
 }
 
-/// Scaffold a manifest stub from an app module's own imports.
+/// Scaffold a manifest stub beside a prebuilt artifact.
+///
+/// A component needs almost nothing said about it -- its own type section
+/// carries the imports and exports, and `air check` reports them -- so this
+/// writes the manifest and stops. A Core module is the interesting case: the
+/// harness has no Core host any more, so the answer is not a manifest key but
+/// a build step, and saying which one is more use than a stub that cannot run.
 pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
-    let m = wasmtime::Module::from_file(engine, app_path)?;
-    let mut namespaces: Vec<String> = vec![];
-    for imp in m.imports() {
-        // `net` is no longer special: the host syscalls retired, so a module
-        // importing it needs a `[[libs]]` module of its own like any other
-        // namespace. A component asks for `;; @wasi sockets` instead.
-        match imp.module() {
-            "env" | "wasi_snapshot_preview1" => {}
-            ns => {
-                if !namespaces.contains(&ns.to_string()) {
-                    namespaces.push(ns.to_string());
-                }
-            }
-        }
+    let bytes = std::fs::read(app_path)?;
+    if !crate::manifest::is_component_binary(&bytes) {
+        // Confirm it is WASM at all before blaming the layer.
+        wasmtime::Module::new(engine, &bytes)?;
+        return fail(format!(
+            "{app_path} is a Core WASM module. The native host has retired, so a \
+             manifest cannot host it directly. Lift it into a component:\n\n  \
+             wasm-tools component embed <wit-dir> {app_path} -o embedded.wasm\n  \
+             wasm-tools component new embedded.wasm -o app.component.wasm\n\n\
+             A module built against WASI Preview 1 needs the standard adapter \
+             instead: `wasm-tools component new {app_path} --adapt \
+             wasi_snapshot_preview1.reactor.wasm`. Then run `air init` on the \
+             component, or declare it as a `[[providers]]` entry of an \
+             application that imports its interface. `air inspect {app_path}` \
+             lists what it exports."
+        ));
     }
     let stem = std::path::Path::new(app_path)
         .file_stem()
@@ -533,19 +486,12 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
     };
     let mut out = String::new();
     out.push_str("mode = \"command\"\n");
-    out.push_str("# root = \"www\"  # uncomment to preopen a data dir (WASI fd 3)\n");
-    out.push_str("# memory_pages = 2  # floor; import minima always win\n\n");
-    for ns in &namespaces {
-        out.push_str(&format!(
-            "[[libs]]  # `{ns}` wanted by {stem}.wasm — point at the providing module\npath = \"<lib-{ns}.wasm>\"\nas = \"{ns}\"\n\n"
-        ));
-    }
-    if namespaces.is_empty() {
-        out.push_str("# no custom namespaces: app needs only env/net/wasi\n\n");
-    }
-    let run = "_start";
+    out.push_str("# root = \"www\"       # uncomment to grant a directory\n");
+    out.push_str("# network = true    # uncomment to allow sockets\n\n");
+    out.push_str("# [[providers]]     # a component this one imports an interface from\n");
+    out.push_str("# path = \"vendor/<name>/artifacts/wasm32-wasi/<name>.component.wasm\"\n\n");
     out.push_str(&format!(
-        "[app]\npath = \"{pref}{stem}.wasm\"\nrun = \"{run}\"\n"
+        "[app]\npath = \"{pref}{stem}.wasm\"\nrun = \"wasi:cli/run\"\n"
     ));
     let toml_path = format!("{pref}host.toml");
     // Never silently overwrite an existing manifest.

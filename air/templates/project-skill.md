@@ -13,11 +13,10 @@ provider, or its WIT/Component Model integration.
 - Every project needs only `air` on `PATH`. It assembles and validates both
   Core WAT and component WAT in-process; do not add WABT, `wit-bindgen`, or a
   language toolchain merely to build an application.
-- **Prefer `target = "component"` (WASI 0.2) for new work.** Preview 1 (`target
-  = "native"`) remains supported and is still required for `[[libs]]`/
-  `[[bridges]]` Core providers. A server is a component that owns its accept
-  loop through `;; @wasi sockets`; a GUI app is a component with `mode = "gui"`
-  that imports `ai-direct:host/ui`.
+- **`target = "component"` (WASI 0.2) is the default and the only target the
+  harness hosts**; `browser` is Core WASM the browser runs. A server is a
+  component that owns its accept loop through `;; @wasi sockets`; a GUI app is
+  a component with `mode = "gui"` importing `ai-direct:host/ui`.
 - `air check`, target run, and `air dist` rebuild a declared root WAT
   source when it or an included fragment is newer than the generated WASM.
   `air build` forces a rebuild.
@@ -150,8 +149,9 @@ Read the WIT for an interface before declaring it. It ships with Wasmtime:
   generator and no language toolchain are involved. Ask for the WASI boundary
   with `;; @wasi <capabilities>`, write the logic in an ordinary
   `(core module ...)`, and lift the entry with `canon lift`.
-- A component app cannot declare `[[libs]]` or `[[bridges]]`: those are Core
-  WASM mechanisms and mean nothing across a component boundary.
+- A prebuilt Core module is not a dependency. Lift it into a component with
+  `wasm-tools component new` (a Preview 1 module needs `--adapt
+  wasi_snapshot_preview1.reactor.wasm`) and declare it under `[[providers]]`.
 - For WIT/Component Model work, define a small versioned WIT contract first;
   validate it, then verify the provider component against its declared world.
   A WIT directory is one package, so each contract needs its own directory.

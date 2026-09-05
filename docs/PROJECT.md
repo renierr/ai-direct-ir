@@ -52,7 +52,6 @@ line or a Core function index back to authored source.
 
 | Target | Current capability boundary |
 |---|---|
-| `native` | Wasmtime, WASI Preview 1, experimental `term.*`, and declared Core providers. No example uses it. |
 | `browser` | Generated Canvas `web.*` host; no provider composition. |
 | `component` | WASM Component + WASI 0.2 through Wasmtime's component linker. Source is a `(component ...)` WAT or a prebuilt component. Consumes provider components through `[[providers]]`. **The default for new projects.** |
 
@@ -66,20 +65,12 @@ needed `bridge.text_width`, a prebuilt Core module linked through
 `[[bridges]]` by sharing raw memory, which a component cannot do. The answer
 was to stop linking a Core module -- see A Provider Instead Of A Bridge.
 
-That leaves the Core provider mechanisms without a consumer. `[[libs]]`
-(shared memory) lost its last one when `gui-hello` became a component;
-`[[bridges]]` (copying adapter) lost its last one here. Both still work, both
-are still reachable from `target = "native"`, and neither is exercised by an
-example or a test any more. `libs/sha256/` and `libs/text-width/`, the Rust
-crates they linked, are likewise unreferenced by any manifest. Retiring the
-three together is the open decision -- the same shape as `net.*` and `ui.*`,
-and the reason is the same: a mechanism with no consumer cannot be shown to
-work. See Next Work item 3.
+That emptied the Core provider mechanisms, and they have been deleted with the
+native host itself. See Retiring The Core Path.
 
-Preview 1 is therefore not deprecated, but nothing in the repository depends
-on it. `web.*` and `term.*` remain builder-phase interfaces: redesign them
-directly when the Component Model provides the correct generic boundary. Do
-not add shims or compatibility layers without a concrete released consumer.
+`web.*` remains a builder-phase interface: redesign it directly when the
+Component Model provides the correct generic boundary. Do not add shims or
+compatibility layers without a concrete released consumer.
 
 ### Modular WAT Source
 
@@ -141,8 +132,8 @@ it. Declaring a region hands that over:
 A named segment with no offset is placed inside the region, packed in source
 order; a named segment that states an offset keeps it. The memory map stays
 author-owned — the region is the one range handed over, not the whole memory,
-because the harness cannot see the scratch addresses, buffers and `[[libs]]` ABI
-maps an application also uses. Three things are errors rather than guesses: an
+because the harness cannot see the scratch addresses, return areas and buffers
+an application also uses. Three things are errors rather than guesses: an
 unplaced segment with no region declared, a region too small for its segments,
 and a region that would run over a segment the author placed.
 
@@ -474,8 +465,8 @@ answers 15 for the styled title whose byte count is 28. The provider's own
 conformance suite lives in the catalog and covers ten cases plus a
 cross-check against Python's `unicodedata`.
 
-Fresh native, browser, GUI, and component scaffolds have completed their
-applicable `new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
+Fresh component, browser and GUI scaffolds have completed their applicable
+`new`, `check`, `run`/`serve`, and `dist` flows. The mail example builds and
 runs from its root `mail.wat` plus `src/state.wat` and
 `src/views/inbox.wat`; changing an included fragment triggers an automatic
 rebuild.
@@ -501,8 +492,11 @@ rebuild.
   (`ai-direct:sha256`, `ai-direct:text-width`), and both reach a consumer by
   being copied into `examples/*/vendor/` by hand. Nothing checks a vendored
   copy against the catalog, and nothing resolves a version.
-- `[[libs]]`, `[[bridges]]`, the Core `term.*` namespace and `target =
-  "native"` have no consumer, no example and no test. See Next Work item 3.
+- A prebuilt Core module cannot be lifted by `air` alone. `wasm-tools component
+  new` does it, and a WASI Preview 1 module needs the standard adapter
+  alongside; neither ships with the harness. `air init` says so, but the step
+  is outside the "only `air` on `PATH`" promise for whoever packages a
+  provider. See Retiring The Core Path.
 - No generic writable WASI data mount, persistence provider, native sidecar, or
   browser provider composition.
 - The mail example remains a Core WASI Preview 1 mock inbox. It has proposed
@@ -521,10 +515,10 @@ WIT interfaces
   -> one distributable component plus air
 ```
 
-The Core `[[libs]]`, `[[bridges]]`, `web.*`, and `term.*` mechanisms are
-experimental transitional tools, not the final public provider format. `net.*`
-and `ui.*` were two of them and have finished the trip: both are gone, one to
-`wasi:sockets` and one to `ai-direct:host/ui`.
+`web.*` is the last experimental transitional mechanism left. The others have
+all finished the trip: `net.*` to `wasi:sockets`, `ui.*` to
+`ai-direct:host/ui`, `term.*` to `ai-direct:host/term`, and `[[libs]]` /
+`[[bridges]]` to `[[providers]]`. Every one of them is deleted.
 
 ### Retiring net.*
 
@@ -608,6 +602,59 @@ Deleted with it: `air/src/net.rs`, the socket table in `Host`, `Mode::Server`,
 server entry signature in `cmds/check.rs`, and `examples/server/mt.toml`. A
 manifest that still says `mode = "server"` now fails to parse, which is the
 right way to find out.
+
+### Retiring The Core Path
+
+`target = "native"`, `[[libs]]`, `[[bridges]]`, the Core `term.*` namespace and
+both `libs/` crates are gone. The harness hosts components and nothing else;
+`browser` remains, because a browser target is Core WASM the browser runs, not
+something `air` links.
+
+They emptied out one conversion at a time rather than by decision. `[[libs]]`
+lost its last consumer when `gui-hello` became a component, `[[bridges]]` when
+`prompts-raw` did, `term.*` at the same moment, and `target = "native"` with
+them. No example used any of it, no test exercised any of it, and a mechanism
+nothing exercises cannot be shown to work.
+
+**The argument that nearly kept them, and why it was wrong.** It first looked
+as though Preview 1 was the only way to link a prebuilt Core module at all --
+that retiring it would shut the door on other languages. That is not true.
+Every toolchain that targets `wasm32-wasip1` lifts to a component with
+`wasm-tools component new --adapt wasi_snapshot_preview1.reactor.wasm`, and
+that needs no source for the module; a module already exporting canonical ABI
+shapes needs no adapter at all, which is how both catalog packages are built.
+Several toolchains emit components directly. Consuming other languages was
+never what `[[libs]]` and `[[bridges]]` were for.
+
+**What actually went with them.** Two things, and it is worth being exact:
+
+- *Zero-copy shared memory.* `[[libs]]` let an application and a Core lib share
+  one linear memory with nothing copied between them. Across a component
+  boundary every value is copied. For a large buffer that is a real cost, and
+  nothing here replaces it.
+- *Lifting with `air` alone.* `air` used to link a Core blob with nothing else
+  installed. Now the blob has to be a component first, which is a `wasm-tools`
+  step. That does not break the promise that an application author needs only
+  `air` on `PATH` -- it moves the tool to whoever packages the provider, which
+  is where the catalog already sits and where `wasm-tools` was already
+  required. It does mean an author pointed at an unlifted `.wasm` needs one
+  more program, which is why `air init` names the exact commands.
+
+The raw pointer ABI was never among the losses. `[[bridges]]` described a
+`(ptr, len, out_ptr)` convention in six manifest keys, and WIT can restate
+those as three `u32`s -- but the pointers mean nothing in another instance's
+memory, which is the reason the bridge existed rather than a reason to keep it.
+See A Provider Instead Of A Bridge.
+
+**What the deletion cost in code.** `link.rs` (204 lines: the Core linker,
+shared-memory sizing, `wire_lib`, `wire_bridge`) and `host.rs` (44 lines: the
+Preview 1 store state) are deleted outright. `term.rs` lost its eight `w_*`
+wrappers and its dependency on a host type; what remains is plain functions
+over a `bool`, which is what `ai-direct:host/term` already called. `manifest.rs`
+lost `Lib`, `Bridge`, `BridgeCall`, `libs`, `bridges` and `memory_pages`.
+`wasmtime-wasi`'s `p1` feature is no longer enabled. A Core module with no
+declared target is now an error that names the two ways forward rather than a
+silent default into a host that cannot run it.
 
 ### The Component Path Works
 
@@ -1010,9 +1057,8 @@ instance, and those names are the harness's ABI, not WASI's. If `boundary.rs`
 can wrap `stream.read` in a blocking shim that keeps those core signatures,
 a p3 move costs the generator and nothing else — no example changes. Whether a
 synchronously-lifted core task can block on `stream.read` in Wasmtime is the
-one question a spike would settle, and it is unanswered here. Note also that
-`examples/server/` and every `native` target are Preview 1 and unaffected
-either way.
+one question a spike would settle, and it is unanswered here. Note also that `browser` targets are Core WASM against a
+generated JavaScript host and are unaffected either way.
 
 The text format is already ready: `wat 1.258` / `wast 258` parse `stream` and
 `future` types along with the `stream.read`, `future.read`, `task.return`, and
@@ -1049,16 +1095,10 @@ being specification-only before more specification is written.
    and growing past one page, still wait on an application that states the
    requirement — a long-lived collection rather than a per-request buffer.
    Grow the mail example far enough to state it.
-3. Decide whether the Core provider mechanisms retire. `[[libs]]`,
-   `[[bridges]]`, the Core `term.*` namespace and both `libs/` crates now have
-   no consumer, no example and no test; `target = "native"` has no example
-   either. That is the state `net.*` and `ui.*` were deleted from, and the
-   argument is the same -- a mechanism nothing exercises cannot be shown to
-   work, and keeping it costs a linker branch, a manifest section and a
-   scaffold path. The counter-argument is that Preview 1 is the only way to
-   link a prebuilt Core module at all, which a future provider might need
-   before it can be built as a component. Neither `[[libs]]` nor `[[bridges]]`
-   should be deleted without answering that.
+3. Convert the mail example to a component. It is the last Core WASI Preview 1
+   application anywhere in the three repositories, and the native host it runs
+   on no longer exists -- see Retiring The Core Path. Nothing in it needs a
+   Core mechanism: it is stdio, a mock inbox in memory, and included fragments.
 4. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing. See Provider Linking above. Converting
    `examples/server/` did not need it: source libs `;; @include`, and a
