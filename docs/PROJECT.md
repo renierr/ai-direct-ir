@@ -436,6 +436,42 @@ transcribed from -- instead of hardcoding capability words. That would end the
 category entirely. Until an application needs it, hand-writing a rare import is
 a declaration an author makes once.
 
+### Granting Directories, And Where An App Keeps State
+
+A component has no ambient filesystem. It reaches exactly what it was granted,
+and there are two anchors, deliberately different:
+
+| Grant | Resolved against | For |
+| --- | --- | --- |
+| `root` / `[[dirs]]` in the manifest | the **manifest** | the application's own directories |
+| `--dir` / `--dir-rw` on the command line | the **shell's working directory** | whatever the user is pointing at |
+
+The split is the useful part. A manifest path is project-relative, so it names
+the same directory wherever `air` was launched from and it travels with the app
+through `air dist` -- next to a distributed binary, project-relative *is* the
+install directory. A command-line grant is relative to the user's shell,
+because that is where the user is looking.
+
+```toml
+[[dirs]]
+path = "data"      # project-relative: <manifest dir>/data
+write = true       # read-only otherwise; writing is the exception
+```
+
+**This is where a stateful app keeps state.** A SQLite database, a cache, a log:
+declare one writable `[[dirs]]` entry and the app owns it. `air` creates it on
+first run, so an application does not have to ship an empty directory, and a
+read-only grant refuses the write rather than silently dropping it.
+
+Nothing is writable unless a grant says so, and `root` stays read-only, so
+adding writes to an app is a visible edit to its manifest rather than a
+property it acquires quietly.
+
+WASI has no global filesystem root, which is the sharpest edge here: an absolute
+path is not a path to anywhere on its own. A tool that takes a file argument
+strips a leading `/` and tries each grant, as `examples/sha256sum/` does, so
+`--dir /` makes an absolute path behave the way a shell user expects.
+
 ### Consuming Someone Else's Compiled Work
 
 `ai-direct:sha256` is the catalog's first package and the first proof that the

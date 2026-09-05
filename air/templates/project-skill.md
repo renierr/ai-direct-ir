@@ -65,6 +65,21 @@ boundary ABI:
 `exit-with-code`, `get-arguments`. Write the program against those in
 an ordinary `(core module $main ...)`.
 
+**A component reads and writes only what it was granted.** Manifest paths are
+project-relative and travel with `air dist`; command-line grants are relative
+to the shell:
+
+```toml
+[[dirs]]
+path = "data"      # <manifest dir>/data
+write = true       # read-only otherwise
+```
+
+`air` creates a writable directory on first run, so that is where a database,
+cache, or log belongs. From the shell use `air run --dir <path>` (read-only) or
+`--dir-rw <path>`, before the manifest. WASI has no global filesystem root, so
+an absolute path resolves nowhere on its own.
+
 **An interface the directive does not name is still available.** `air` links
 the whole WASI 0.2 set, so declare the import by hand and lower it with the
 generated `$memory` / `$realloc`. `examples/sha256sum/` in the harness
