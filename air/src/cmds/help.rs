@@ -93,6 +93,29 @@ pub fn print_help() {
     ] {
         help_line(&mut out, color, command, description);
     }
+    // Argument order is the one thing about the CLI that is not guessable:
+    // the manifest is the divider, and everything past it belongs to the app.
+    help_section(&mut out, color, "ARGUMENTS");
+    for (command, description) in [
+        (
+            "air run --dir . host.toml a b",
+            "host options come BEFORE the manifest",
+        ),
+        (
+            "",
+            "everything after it goes to the app, argv[0] = the app name",
+        ),
+        (
+            "--dir <p> / --dir-rw <p>",
+            "grant a directory, relative to the shell",
+        ),
+        (
+            "--net",
+            "grant sockets; a manifest asks with `network = true`",
+        ),
+    ] {
+        help_line(&mut out, color, command, description);
+    }
 }
 
 fn help_section(out: &mut std::io::Stdout, color: bool, title: &str) {

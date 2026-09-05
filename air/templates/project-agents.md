@@ -40,10 +40,11 @@ secrets, generated output, and local provider caches out of source control.
   `docs/03-verification.md` before claiming a feature is complete.
 - Keep the WAT memory map current. Pointer ranges, byte lengths, and shared
   memory ownership are ABI, not incidental implementation details.
-- Read `docs/PROJECT.md` in the harness repository before changing a
-  built-in host import. Add application dependencies as declared `[[libs]]` or
-  `[[bridges]]`; their namespaces and exports are project-owned. `air
-  check` proves the complete declared module graph links.
+- Changing a built-in host import? The harness repository's `docs/PROJECT.md`
+  is the source of truth — consult the relevant section, not the whole file.
+  Add application dependencies as declared `[[libs]]` or `[[bridges]]`; their
+  namespaces and exports are project-owned. `air check` proves the complete
+  declared module graph links.
 - Keep generated `.wasm` out of source control unless this application
   deliberately distributes it.
 - `.gitignore` excludes generated build output and the future `dist/` release
