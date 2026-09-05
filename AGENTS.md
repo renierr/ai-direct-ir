@@ -89,6 +89,8 @@ Start with `air inspect <file>`.
   inside `(component` generates the imports, the shared memory and the
   canonical ABI lowering; `pages=` and `heap=` size the memory. Write the
   program against the `$wasi` and `$mem` core instances it defines.
+- `exit` takes a `result`: 0 or 1, nothing else, so it says only whether the
+  run failed. For a POSIX-style status ask for `exit-with-code` (`u8`).
 - A component consumes another component through `[[providers]]`, wired at link
   time. No composition tool is involved.
 - Commit messages: short imperative summary.

@@ -48,7 +48,8 @@ lowering:
   ;; @wasi stdin stdout stderr exit pages=2 heap=0x8000
 ```
 
-Capabilities are `stdin`, `stdout`, `stderr`, `exit`; `pages=` (default 1) and
+Capabilities are `stdin`, `stdout`, `stderr`, `exit`, `exit-with-code`;
+`pages=` (default 1) and
 `heap=` (default `0x8000`, the canonical ABI bump base) are optional. An
 unknown word is an error, not a silent omission. The generated names are the
 boundary ABI:
@@ -76,8 +77,11 @@ failed run:
 )
 ```
 
-For an exit from deep inside the program, where a return cannot reach, add the
-`exit` capability: it is the direct replacement for Preview 1's `proc_exit`.
+For an exit from deep inside the program, where a return cannot reach, add an
+exit capability. `exit` takes a `result` -- 0 or 1, nothing else -- so passing
+it a status code traps on an unexpected discriminant. Use `exit-with-code`
+(`u8`) when the program has real exit codes; it is the direct replacement for
+Preview 1's `proc_exit`.
 
 **Consume a provider.** Declare it in the manifest and import its interface
 like any other:

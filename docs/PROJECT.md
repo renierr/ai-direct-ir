@@ -171,7 +171,10 @@ does not say why. One directive replaces all of it:
   ;; @wasi stdin stdout stderr exit pages=2 heap=0x8000
 ```
 
-Capabilities are `stdin`, `stdout`, `stderr` and `exit`. `pages=` (default 1)
+Capabilities are `stdin`, `stdout`, `stderr`, `exit` and `exit-with-code`.
+`exit` takes a `result`, so 0 and 1 are the only representable values and it
+says only whether the run failed; `exit-with-code` takes a `u8` for a
+POSIX-style status. `pages=` (default 1)
 sizes the memory and `heap=` (default `0x8000`) places the canonical ABI bump
 allocator above the application's fixed addresses. An unknown word is an error,
 not a silent omission, and a second directive is rejected rather than left to
