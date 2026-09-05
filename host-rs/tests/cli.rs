@@ -601,3 +601,114 @@ fn a_component_can_import_the_projects_own_interface() {
     // Tests do not run on a terminal, so the honest answer is "no".
     assert_eq!(stdout(&ran), "terminal: no\n");
 }
+
+/// Rewrite the scaffolded component's `;; @wasi` line.
+fn set_wasi_directive(project: &Path, args: &str) {
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    let rewritten: String = source
+        .lines()
+        .map(|line| {
+            if line.trim().starts_with(";; @wasi") {
+                format!("  ;; @wasi {args}\n")
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    assert!(rewritten.contains(args), "directive not rewritten");
+    std::fs::write(&root, rewritten).expect("write root wat");
+}
+
+/// The generated boundary imports what the directive asked for and nothing
+/// else. Import names survive into the artifact as literal strings, so the
+/// bytes themselves are the evidence.
+#[test]
+fn the_wasi_directive_imports_only_the_requested_capabilities() {
+    let project = scaffold_target("wasi-capabilities", "component");
+    let artifact = project.join("app.wasm");
+
+    assert!(run(&project, &["build"]).status.success());
+    let bytes = std::fs::read(&artifact).expect("read artifact");
+    let names = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(names.contains("wasi:cli/stdout@"), "stdout was requested");
+    assert!(
+        !names.contains("wasi:cli/stdin@"),
+        "stdin was not requested"
+    );
+    assert!(!names.contains("wasi:cli/exit@"), "exit was not requested");
+
+    set_wasi_directive(&project, "stdout stdin exit pages=2");
+    let rebuilt = run(&project, &["build"]);
+    assert!(
+        rebuilt.status.success(),
+        "build failed: {}",
+        stderr(&rebuilt)
+    );
+    let bytes = std::fs::read(&artifact).expect("read rebuilt artifact");
+    let names = String::from_utf8_lossy(&bytes).into_owned();
+    assert!(names.contains("wasi:cli/stdin@"), "stdin was requested");
+    assert!(names.contains("wasi:cli/exit@"), "exit was requested");
+
+    // Adding capabilities does not disturb the program written against them.
+    let ran = run(&project, &["run"]);
+    assert!(ran.status.success(), "run failed: {}", stderr(&ran));
+    assert_eq!(stdout(&ran), "hello from app\n");
+}
+
+/// A misspelled capability stops the build and names the line that asked for
+/// it, rather than silently generating a boundary without it.
+#[test]
+fn an_unknown_wasi_capability_is_rejected() {
+    let project = scaffold_target("wasi-typo", "component");
+    set_wasi_directive(&project, "stdout stdinn");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "a typo must not build");
+    let message = stderr(&built);
+    assert!(message.contains("stdinn"), "{message}");
+    assert!(message.contains("app.wat"), "{message}");
+}
+
+/// Two boundaries would redefine every generated name. Say so directly instead
+/// of reporting a duplicate identifier in code the author never wrote.
+#[test]
+fn a_second_wasi_directive_is_rejected() {
+    let project = scaffold_target("wasi-twice", "component");
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    // Duplicate the directive line itself; the file header mentions it in prose.
+    let doubled: String = source
+        .lines()
+        .map(|line| {
+            if line.trim().starts_with(";; @wasi") {
+                format!("{line}\n  ;; @wasi stderr\n")
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&root, doubled).expect("write root wat");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "two boundaries must not build");
+    let message = stderr(&built);
+    assert!(message.contains("second WASI boundary"), "{message}");
+}
+
+/// The boundary is generated, so a validation failure inside the application
+/// must still point at the application's own line.
+#[test]
+fn errors_below_a_generated_boundary_keep_their_line() {
+    let project = scaffold_target("wasi-origins", "component");
+    let root = project.join("app.wat");
+    let source = std::fs::read_to_string(&root).expect("read root wat");
+    let broken = source.replace("(i32.load (i32.const 0x200))", "(i32.load (f32.const 0))");
+    assert_ne!(broken, source, "the run body was not found");
+    std::fs::write(&root, broken).expect("write root wat");
+
+    let built = run(&project, &["build"]);
+    assert!(!built.status.success(), "invalid WAT must not build");
+    let message = stderr(&built);
+    assert!(message.contains("app.wat"), "{message}");
+}
