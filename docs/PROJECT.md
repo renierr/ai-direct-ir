@@ -138,6 +138,63 @@ addresses so that each depends on the previous string's length — but that mean
 the harness owning the memory map, which the `[[libs]]` shared-memory address
 maps also depend on. That is a separate decision.
 
+### The Generated WASI Boundary
+
+Declaring the WASI 0.2 interfaces, lowering them into Core functions and
+exposing a shared memory was the same ~55 lines in every component, and the
+most error-prone lines in the repository: a signature that names a local type
+id instead of the exported one rejects the whole instance, and the message
+does not say why. One directive replaces all of it:
+
+```wat
+(component
+  ;; @wasi stdin stdout stderr exit pages=2 heap=0x8000
+```
+
+Capabilities are `stdin`, `stdout`, `stderr` and `exit`. `pages=` (default 1)
+sizes the memory and `heap=` (default `0x8000`) places the canonical ABI bump
+allocator above the application's fixed addresses. An unknown word is an error,
+not a silent omission, and a second directive is rejected rather than left to
+fail as a duplicate identifier in generated text.
+
+`host-rs` emits only what was asked for: `exit` alone pulls in neither
+`wasi:io/streams` nor `wasi:io/error`, and `stdout` with `stderr` share one
+output stream and one lowered `write`. The generated names are the boundary's
+ABI, so the application can rely on them:
+
+| Name | What it is |
+| --- | --- |
+| `$mem` | core instance exporting `memory` — `(with "env" (instance $mem))` |
+| `$wasi` | core instance of lowered imports — `(with "wasi" (instance $wasi))` |
+| `$memory` / `$realloc` | the memory and its bump allocator, for lowering further imports |
+
+`$wasi` exports one Core function per capability: `get-stdin`, `read`,
+`get-stdout`, `get-stderr`, `write`, `exit`. Everything below the directive is
+ordinary Core WAT.
+
+Every generated line reports the directive as its origin, so a validator
+complaint about the boundary points at the line the author wrote rather than at
+text they never saw.
+
+Converting the four component sources removed 208 lines and changed no
+behavior:
+
+| Source | Before | After |
+| --- | --- | --- |
+| `examples/hello/hello.wat` | 96 | 42 |
+| `examples/pi/pi.wat` | 329 | 253 |
+| `examples/prompts/prompts.wat` | 439 | 364 |
+| `examples/provider-demo/consumer.wat` | 93 | 39 |
+
+This is the same argument that produced named data segments, applied to the
+next hand-maintained detail. It also changes what an AI has to know: the
+Component Model text format is thinly represented in training data, which is
+exactly why these lines were copied between examples rather than written. A
+generated boundary removes the need for that knowledge instead of documenting
+it. Interfaces that are not WASI — a provider's, or the project's own
+`ai-direct:host/term` — are still declared by hand; they are one import and one
+lowering, not a type graph.
+
 New projects contain `src/README.md` and the generic
 `.agents/skills/ai-direct-ir/SKILL.md`. The skill covers WAT/WASM/WIT/provider
 workflow and environment rules; project behavior belongs in its docs and
@@ -219,7 +276,10 @@ format.
 **An AI can author a WASI 0.2 component by hand, in WAT, with no bindings
 generator and no language toolchain.** This was the open question behind the
 whole component plan, and it is now answered by a running program rather than
-an argument.
+an argument. Having proved it, the harness took the work over: the boundary
+those examples once spelled out is now generated from `;; @wasi` (see The
+Generated WASI Boundary), which emits the same WAT an author could have
+written. The proof stands; the typing does not have to be repeated.
 
 `examples/hello/`, `examples/pi/`, and `examples/prompts/` are `wasi:cli/command`
 components written entirely as component WAT. They declare the `wasi:io/error`,
@@ -364,11 +424,12 @@ being specification-only before more specification is written.
    test. It can be hand-authored the way `examples/provider-demo/` is, so no
    Rust component toolchain is needed; `libs/sha256/` stays the reference to
    check the result against. Runtime provider linking already consumes it.
-2. Generate the WASI/WIT interface boundary from a `.wit` file. The examples
-   prove it is writable by hand, and that it is the most error-prone and most
-   duplicated part of an otherwise ordinary Core WAT program: three examples
-   carry the same ~60 lines. It is mechanically derivable, which is the same
-   argument that produced named data segments.
+2. Take the next hand-maintained detail after the boundary: memory layout.
+   Records with named fields and a real allocator, so an application stops
+   assigning addresses by hand. `examples/prompts/prompts.wat` chains string
+   addresses so each depends on the previous string's length, and that is the
+   pattern that will not survive an application with dynamic collections. See
+   The Generated WASI Boundary above for the method.
 3. Give `ui.*` and `net.*` value-based signatures so components can import
    them, then convert `gui-hello`. `term.*` already made the trip as
    `ai-direct:host/term`.

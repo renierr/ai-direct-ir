@@ -83,6 +83,10 @@ Start with `host-rs inspect <file>`.
 - Prefer `target = "component"` (WASI 0.2) for new work; it is the default and
   is inferred from the artifact, so a manifest rarely states it. Reach for
   `native` (Preview 1) only for Core providers or a pointer-passing host ABI.
+- Never hand-write the WASI 0.2 boundary. `;; @wasi stdin stdout stderr exit`
+  inside `(component` generates the imports, the shared memory and the
+  canonical ABI lowering; `pages=` and `heap=` size the memory. Write the
+  program against the `$wasi` and `$mem` core instances it defines.
 - A component consumes another component through `[[providers]]`, wired at link
   time. No composition tool is involved.
 - Commit messages: short imperative summary.
