@@ -40,7 +40,9 @@
   ;; caller reads it exactly as it read the Preview 1 nread.
   (func $read_one (param $ptr i32) (result i32)
     (call $read (call $get_stdin) (i64.const 1) (i32.const 0x10))
-    (if (i32.load (i32.const 0x10)) (then (return (i32.const 1))))
+    ;; The discriminant is a u8: `i32.load` would read three bytes of
+    ;; undefined padding along with the tag.
+    (if (i32.load8_u (i32.const 0x10)) (then (return (i32.const 1))))
     (i32.store (i32.const 0x0C) (i32.load (i32.const 0x18)))
     (if (i32.load (i32.const 0x0C))
       (then (i32.store8 (local.get $ptr)
