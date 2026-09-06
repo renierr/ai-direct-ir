@@ -80,6 +80,18 @@ fn install_example_providers(cache: &Path) {
         &["add", "--from", &width, "ai-direct:text-width@0.1.0"],
     );
     assert!(out.status.success(), "{}", stderr(&out));
+    let base64 = repo()
+        .parent()
+        .expect("workspace parent")
+        .join("ai-direct-ir-providers/providers/base64")
+        .to_string_lossy()
+        .into_owned();
+    let out = run_with_cache(
+        &repo().join("examples/base64"),
+        cache,
+        &["add", "--from", &base64, "ai-direct:base64@0.1.0"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
 }
 
 fn example_cache(name: &str) -> PathBuf {
@@ -268,6 +280,7 @@ fn repository_examples_check() {
     let cache = scratch("examples-cache");
     install_example_providers(&cache);
     let manifests = [
+        "examples/base64/host.toml",
         "examples/hello/host.toml",
         "examples/pi/host.toml",
         "examples/prompts/host.toml",
@@ -285,6 +298,9 @@ fn repository_examples_check() {
             stderr(&out)
         );
     }
+    let base64 = run_with_cache(&repo, &cache, &["run", "examples/base64/host.toml"]);
+    assert!(base64.status.success(), "{}", stderr(&base64));
+    assert_eq!(stdout(&base64), "Zm9vYmFy");
 }
 
 /// Connect to `addr`, retrying while the guest is still starting up. The

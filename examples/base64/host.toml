@@ -1,0 +1,12 @@
+# Base64 is an external component provider, installed once from its reviewed
+# release package: air add --from ../../../ai-direct-ir-providers/providers/base64 ai-direct:base64@0.1.0
+mode = "command"
+
+[[providers]]
+package = "ai-direct:base64"
+version = "0.1.0"
+
+[app]
+source = "base64.wat"
+path = "base64.wasm"
+run = "wasi:cli/run"
