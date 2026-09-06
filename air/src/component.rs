@@ -8,7 +8,7 @@
 //! Nothing here is new machinery: the embedded `wat` parser already handles the
 //! Component Model text format, and `wasmtime-wasi` already carries WASI 0.2.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use wasmtime::component::{Component, Func, Instance, Linker, ResourceTable, types::ComponentItem};
 use wasmtime::{Engine, Result, Store, StoreContextMut};
@@ -181,7 +181,7 @@ pub fn link_all(
     p2::add_to_linker_sync(&mut linker)?;
     add_term_to_linker(&mut linker)?;
     add_ui_to_linker(&mut linker)?;
-    wire_providers(engine, &mut linker, &mut store, manifest, base)?;
+    wire_providers(engine, &mut linker, &mut store, &component, manifest, base)?;
     let instance = linker.instantiate(&mut store, &component)?;
     let entry = entry_of(engine, &component, &manifest.app.run)?;
     Ok(Linked {
@@ -302,13 +302,20 @@ fn add_ui_to_linker(linker: &mut Linker<Host>) -> Result<()> {
 /// composer. What it does not do is fuse the two into one distributable
 /// component, and handles cannot cross the boundary, because each instance
 /// owns its own resource table. Plain values pass through untouched.
+///
+/// A provider that does not export what the application imports fails here
+/// with the entry named, rather than at instantiate as a linker error.
 fn wire_providers(
     engine: &Engine,
     linker: &mut Linker<Host>,
     store: &mut Store<Host>,
+    app: &Component,
     manifest: &Manifest,
     base: &Path,
 ) -> Result<()> {
+    // Load every provider before wiring any: conformance is checked against
+    // the union of what all of them export.
+    let mut loaded: Vec<(PathBuf, Component)> = Vec::new();
     for provider in &manifest.providers {
         let path = join(base, &provider.path);
         let bytes = std::fs::read(&path)?;
@@ -318,12 +325,15 @@ fn wire_providers(
                 path.display()
             )));
         }
-        let component = Component::new(engine, &bytes)?;
+        loaded.push((path, Component::new(engine, &bytes)?));
+    }
+    check_provider_exports(engine, app, &loaded)?;
+    for (path, component) in &loaded {
         // A provider gets WASI and nothing else: it may not depend on the
         // application, and provider-to-provider wiring is not supported yet.
         let mut provider_linker = Linker::<Host>::new(engine);
         p2::add_to_linker_sync(&mut provider_linker)?;
-        let instance = provider_linker.instantiate(&mut *store, &component)?;
+        let instance = provider_linker.instantiate(&mut *store, component)?;
 
         // Resolve every exported function first, then define them: looking up
         // needs the store, defining needs the linker.
@@ -331,18 +341,18 @@ fn wire_providers(
         for (name, item) in component.component_type().exports(engine) {
             match item.ty {
                 ComponentItem::ComponentFunc(_) => {
-                    let func = lookup(&instance, store, None, name, &path)?;
+                    let func = lookup(&instance, store, None, name, path)?;
                     exported.push((None, name.to_string(), func));
                 }
                 ComponentItem::ComponentInstance(interface) => {
                     let outer = instance
                         .get_export_index(&mut *store, None, name)
-                        .ok_or_else(|| lost(&path, name))?;
+                        .ok_or_else(|| lost(path, name))?;
                     for (func_name, func_item) in interface.exports(engine) {
                         if !matches!(func_item.ty, ComponentItem::ComponentFunc(_)) {
                             continue;
                         }
-                        let func = lookup(&instance, store, Some(&outer), func_name, &path)?;
+                        let func = lookup(&instance, store, Some(&outer), func_name, path)?;
                         exported.push((Some(name.to_string()), func_name.to_string(), func));
                     }
                 }
@@ -366,6 +376,99 @@ fn wire_providers(
         }
     }
     Ok(())
+}
+
+/// Fail before linking when a declared provider does not export what the
+/// application imports.
+///
+/// Without this the mismatch surfaces at `linker.instantiate` as a linker
+/// error naming the interface but not the `[[providers]]` entry at fault.
+/// For every interface at least one provider exports, each function the app
+/// imports from that same-named interface must be exported by some provider;
+/// otherwise the error names the interface, the missing function, and the
+/// entries exporting that interface. Host interfaces never trigger this: no
+/// provider exports them, so they stay the linker's business.
+fn check_provider_exports(
+    engine: &Engine,
+    app: &Component,
+    providers: &[(PathBuf, Component)],
+) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
+
+    /// One wanted or offered function: an instance interface, or the root
+    /// namespace for a component-level function.
+    type At = (Option<String>, String);
+    let mut wanted: HashSet<At> = HashSet::new();
+    for (name, item) in app.component_type().imports(engine) {
+        match &item.ty {
+            ComponentItem::ComponentFunc(_) => {
+                wanted.insert((None, name.to_string()));
+            }
+            ComponentItem::ComponentInstance(interface) => {
+                for (func, exported) in interface.exports(engine) {
+                    if matches!(exported.ty, ComponentItem::ComponentFunc(_)) {
+                        wanted.insert((Some(name.to_string()), func.to_string()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Which providers export each interface at all, for attribution.
+    let mut claimants: HashMap<Option<String>, Vec<String>> = HashMap::new();
+    let mut offered: HashSet<At> = HashSet::new();
+    for (path, provider) in providers {
+        let display = path.display().to_string();
+        for (name, item) in provider.component_type().exports(engine) {
+            match &item.ty {
+                ComponentItem::ComponentFunc(_) => {
+                    claimants.entry(None).or_default().push(display.clone());
+                    offered.insert((None, name.to_string()));
+                }
+                ComponentItem::ComponentInstance(interface) => {
+                    let at = Some(name.to_string());
+                    claimants
+                        .entry(at.clone())
+                        .or_default()
+                        .push(display.clone());
+                    for (func, exported) in interface.exports(engine) {
+                        if matches!(exported.ty, ComponentItem::ComponentFunc(_)) {
+                            offered.insert((at.clone(), func.to_string()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut missing: Vec<At> = wanted
+        .into_iter()
+        .filter(|at| claimants.contains_key(&at.0) && !offered.contains(at))
+        .collect();
+    missing.sort();
+    let Some((at, func)) = missing.into_iter().next() else {
+        return Ok(());
+    };
+    let mut sources = claimants[&at].clone();
+    sources.sort();
+    sources.dedup();
+    let from = match &at {
+        Some(interface) => format!("interface `{interface}`"),
+        None => "the root namespace".to_string(),
+    };
+    let who = sources
+        .iter()
+        .map(|source| format!("`{source}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verb = if sources.len() == 1 {
+        "provider"
+    } else {
+        "providers"
+    };
+    Err(wasmtime::Error::msg(format!(
+        "{verb} {who} export {from} without `{func}`, which the application imports"
+    )))
 }
 
 fn lost(path: &Path, name: &str) -> wasmtime::Error {

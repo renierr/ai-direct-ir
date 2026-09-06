@@ -87,10 +87,13 @@ scanner, address parsing, byte-length decoding, and emitted lowerings.
 
 ## Current Gaps
 
-- No WIT conformance check in `air`. Nothing verifies that a `[[providers]]`
-  artifact exports the world its contract declares; a disagreement surfaces
-  as a link failure. `air/wit/ai-direct-host/host.wit` is one file for both
-  sides — the shape a provider's WIT should reach.
+- No full WIT conformance check in `air`. `air check` verifies every
+  function the app imports from a provider-exported interface is exported by
+  some `[[providers]]` entry, naming the entry, the interface, and the
+  missing function — but signatures are still only type-checked at link
+  time, and nothing verifies a provider artifact against its contract WIT.
+  `air/wit/ai-direct-host/host.wit` is one file for both sides — the shape
+  a provider's WIT should reach.
 - No build-time composition: app ships alongside providers, and resource
   handles cannot cross a provider boundary.
 - The heap frees in one order or not at all. `heap-mark`/`heap-reset`

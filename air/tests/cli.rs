@@ -604,6 +604,44 @@ fn a_core_module_is_rejected_as_a_provider() {
     );
 }
 
+#[test]
+fn provider_mismatch_names_the_provider_and_the_missing_function() {
+    let project = scratch("provider-mismatch");
+    // The provider offers `shout`; the consumer wants `shout` plus a
+    // `whisper` nobody exports. Read-only copies, so no examples lock.
+    let demo = repo().join("examples/provider-demo");
+    std::fs::copy(demo.join("provider.wat"), project.join("provider.wat"))
+        .expect("copy provider source");
+    let consumer =
+        std::fs::read_to_string(demo.join("consumer.wat")).expect("read consumer source");
+    let marker = "(export \"shout\" (func (param \"text\" string) (result string)))))";
+    assert!(consumer.contains(marker), "consumer fixture changed shape");
+    std::fs::write(
+        project.join("consumer.wat"),
+        consumer.replace(
+            marker,
+            "(export \"shout\" (func (param \"text\" string) (result string)))\n    (export \"whisper\" (func (param \"text\" string) (result string)))))",
+        ),
+    )
+    .expect("write consumer source");
+    std::fs::write(
+        project.join("host.toml"),
+        "mode = \"command\"\n\n[[providers]]\nsource = \"provider.wat\"\npath = \"provider.wasm\"\n\n[app]\nsource = \"consumer.wat\"\npath = \"consumer.wasm\"\nrun = \"wasi:cli/run\"\n",
+    )
+    .expect("write manifest");
+
+    let built = run(&project, &["build"]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    let out = run(&project, &["check"]);
+    assert!(!out.status.success(), "mismatch must fail check");
+    let err = stderr(&out);
+    // The error attributes the fault: which entry, which interface, which
+    // function — not just the linker's unnamed missing import.
+    assert!(err.contains("provider.wasm"), "{err}");
+    assert!(err.contains("ai-direct:demo/text"), "{err}");
+    assert!(err.contains("whisper"), "{err}");
+}
+
 /// The vendored `ai-direct:text-width` provider, exercised on the case
 /// `examples/prompts-raw/` depends on: a styled label whose column count is
 /// neither its 28 bytes nor its 24 characters. ANSI CSI sequences cost no
