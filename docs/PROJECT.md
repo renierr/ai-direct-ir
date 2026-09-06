@@ -27,9 +27,10 @@ dependency.
 | `ai-direct-ir-example-mail` | Consumer and integration driver | WAT application behavior, user flows, state policy, and declared provider consumption. |
 
 The catalog is Apache-2.0 while the harness and the example stay
-AGPL-3.0-or-later. A provider is vendored *into* a consuming application, so a
-copyleft catalog would decide the license of every application that adopts one.
-The harness is a host an application runs under, not code it links in.
+AGPL-3.0-or-later. A provider is cached during development and copied into a
+distribution, so a copyleft catalog would decide the license of every
+application that adopts one. The harness is a host an application runs under,
+not code it links in.
 
 The mail app may break while it reveals an inadequate generic interface. Solve
 the general requirement in the harness or provider catalog; never add a
@@ -40,7 +41,7 @@ tradeoffs, platform limits, and a recommendation.
 
 ## Current Harness State
 
-`air` is version `2.0.0`. It embeds the Rust `wat` parser, so an application
+`air` is version `2.1.0`. It embeds the Rust `wat` parser, so an application
 needs only `air` on `PATH`. A manifest does not have to declare `target`: the
 artifact's preamble says whether it is a component or a Core module, and an
 explicit `target` that disagrees is an error. `new` creates and assembles a
@@ -119,8 +120,9 @@ scanner, address parsing, byte-length decoding, and emitted lowerings.
   `$XDG_CACHE_HOME/air/providers` (or `~/.cache/air/providers`); adds a package
   declaration to `host.toml`; and writes the portable, committed `air.lock`.
   `build`, `check`, `run`, and `dist` resolve only the lock and rehash artifact,
-  metadata, and WIT every time. A missing or changed cache entry fails rather
-  than fetching or upgrading. `dist` writes a provenance `air.lock` and places
+  metadata, and WIT every time. A missing or changed cache entry is restored
+  only from the declared lock-pinned registry, then verified; it never fetches
+  or upgrades a different release. `dist` writes a provenance `air.lock` and places
   locked artifacts under collision-proof `providers/<package>-<version>-<hash>`
   paths. There is deliberately no registry fetch, update solver, authentication,
   or network policy yet; prove local catalog consumption through the mail driver

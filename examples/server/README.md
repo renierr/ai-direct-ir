@@ -1,7 +1,7 @@
 # server
 
 A static file server as a WASI 0.2 component. It owns its accept loop, reads
-one granted directory, and gets its digest from a vendored provider component.
+one granted directory, and gets its digest from a locked provider component.
 
 ```bash
 air run examples/server/host.toml          # :8124
@@ -17,8 +17,8 @@ curl -sS http://127.0.0.1:8124/quit            # stops the run
   sockets` generates the boundary and the guest runs `accept` itself. Nothing
   in `air` knows this application is a server.
 - **One catalog package, two applications.** The digest comes from the same
-  vendored `ai-direct:sha256` provider component `examples/sha256sum/`
-  consumes, through one `[[providers]]` line. The Core `[[bridges]]` block it
+  locked `ai-direct:sha256` provider component `examples/sha256sum/` consumes,
+  through one `[[providers]]` line. The Core `[[bridges]]` block it
   replaced needed four byte offsets and a `max_in`.
 - **Handles are released per request.** A connection is three handles and a
   served file is two more. Dropping the accepted socket is what closes the

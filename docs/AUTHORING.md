@@ -231,7 +231,8 @@ version = "0.1.0"
 user cache (`$XDG_CACHE_HOME/air/providers`, or `~/.cache/air/providers`), and
 writes `air.lock`. `build`, `check`, `run`, and `dist` resolve only that lock
 and rehash the artifact, metadata, and WIT before use. A missing or altered
-cache entry fails; it never changes provider versions implicitly. `air dist`
+cache entry is restored from a declared lock-pinned registry, then verified; it
+never changes provider versions implicitly. `air dist`
 copies exactly the locked artifacts under `providers/`, with package/version/
 hash names, and carries `air.lock` as release provenance.
 

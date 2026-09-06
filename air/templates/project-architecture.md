@@ -25,8 +25,9 @@ provider with an explicit ABI.
 |---|---|---|---|
 | Example | `ai-direct:example` | Planned | Replace with the actual need. |
 
-Declare only locally vendored provider artifacts in `host.toml`. Record their
-WIT contract, source/provenance, license, hash, and required permissions.
+Declare released provider package/version pairs in `host.toml`, then commit
+`air.lock`; it records the WIT contract, registry provenance, license and
+hashes. Use local `source`/`path` entries only while developing a provider.
 
 ## Trust Boundary
 

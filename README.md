@@ -56,9 +56,9 @@ Naming a data segment — `(data $msg (i32.const 0x1000) "...")` — gets you
 `$msg.ptr` and `$msg.len` from the harness, so a string's byte count is never
 written by hand and can never go stale.
 
-A prebuilt component needs only `air` to check, run, or distribute. How a
-root component gets composed with prebuilt provider components is still an open
-decision; see the `wasm-tools` boundary below.
+A prebuilt component needs only `air` to check, run, or distribute. Components
+and their declared providers are runtime-linked by `air`; build-time fusion of
+that checked graph remains an optional future distribution optimization.
 
 ### Changing The Harness
 
@@ -128,6 +128,32 @@ the application's imports at link time. No composition tool, no new dependency
 components rather than one fused artifact, and resource handles do not cross
 the boundary; plain values do.
 
+Released providers use a package declaration and a committed lock, rather than
+a copied provider tree:
+
+```toml
+[registry]
+source = "https://github.com/renierr/ai-direct-ir-providers.git"
+
+[[providers]]
+package = "ai-direct:base64"
+version = "0.1.0"
+```
+
+Select and lock it deliberately once with `air add ai-direct:base64@0.1.0`.
+This writes `air.lock` and caches the reviewed package under
+`$XDG_CACHE_HOME/air/providers` (or `~/.cache/air/providers`). `build`,
+`check`, `run`, and `dist` verify the locked artifact, metadata, and WIT before
+use. With a healthy cache they make no registry request. If the cached package
+is missing or corrupt, they restore the exact package from the lock-pinned
+registry revision and verify it again; they never select a newer version.
+`air add --from <package-dir> <package>@<version>` is the explicit local
+override for provider development and has no automatic restoration source.
+
+`air dist` copies only resolved providers into namespaced `providers/` paths
+with a release `air.lock`; the resulting bundle needs no provider cache or
+registry access.
+
 A component may also import the project's own capabilities under a WIT
 interface name, exactly as it imports a WASI one: `ai-direct:host/term` for
 raw-mode terminals (`examples/prompts-raw/`) and `ai-direct:host/ui` for the
@@ -143,17 +169,19 @@ egui window a `mode = "gui"` app draws into (`examples/gui-hello/`).
 | `wasm-tools component targets` | Confirm that a component implements the declared WIT world. |
 
 **Composition is an open decision, deliberately deferred.** The component text
-format has no form for embedding a prebuilt `.wasm`, so wiring a root component
-to vendored provider *binaries* needs something more than the `wat` parser.
+format has no form for embedding a prebuilt `.wasm`, so fusing a root component
+to provider *binaries* needs something more than the `wat` parser.
 `wasm-tools compose` still runs in 1.257.1 but announces `has been deprecated.
 Please use wac instead.`, so it is not a foundation to build on. The options are
 an external `wac` CLI, an in-process composition crate, or emitting the
-composition ourselves. None of them is worth adopting before a real provider
-exists to compose; the decision waits for that provider.
+composition ourselves. An in-process `wac-graph` spike fused the flat demo but
+produced an invalid server plus SHA-256 graph, so multi-file distribution
+remains the known-good default.
 
-`air` will load and execute a completed component through Wasmtime and
-WASI 0.2. It will not fetch providers at runtime or place any build tool in
-`dist/`.
+`air` will load and execute a completed component through Wasmtime and WASI
+0.2. It restores only an already lock-pinned provider when a cache entry is
+missing; it does not select or update dependencies at runtime, and it never
+places a build tool in `dist/`.
 
 ## Build The Harness
 

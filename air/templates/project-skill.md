@@ -32,7 +32,8 @@ provider, or its WIT/Component Model integration.
 - `wasm-tools` is an optional cross-check, never required to build an app. Use
   `validate`, `component wit`, and `component targets`; do not place it in an
   application distribution or invoke it at runtime. `wasm-tools compose` is
-  deprecated upstream — composition of prebuilt components is an open decision.
+  deprecated upstream — composition of prebuilt components remains deferred;
+  `air dist` ships the checked app and locked providers as separate artifacts.
 - Never install, upgrade, or remove tooling without explicit user consent.
 
 ## WASI 0.2 Recipes
