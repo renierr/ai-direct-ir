@@ -1,0 +1,10 @@
+[[provider]]
+package = "ai-direct:text-width"
+version = "0.1.0"
+target = "wasm32-wasi"
+sha256 = "623110d784e6d73d6db4a20f2e876b438c808c32a12df4fbc68bcb41a5e5afc9"
+wit_sha256 = "f868e786f5e4129012e98ef4118dbf1512e42408d5a22cbcaee9bdee44297b62"
+metadata_sha256 = "f68d7ebb1557d14965a113f333942bd2df7bd8afdee2840f6cf4d71357ae723e"
+license = "Apache-2.0 AND (MIT OR Apache-2.0)"
+source = "local"
+artifact = "artifacts/wasm32-wasi/text-width.component.wasm"

@@ -2,6 +2,7 @@
 # Exception: examples/**/*.wasm are tracked as runnable distributables.
 *.wasm
 !examples/**/*.wasm
+.air/
 native/gen/
 native/*-native
 air/target/

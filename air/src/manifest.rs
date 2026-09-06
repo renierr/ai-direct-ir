@@ -88,7 +88,12 @@ pub struct Provider {
     /// Declaring it is what keeps a provider artifact from drifting from the
     /// source beside it.
     pub source: Option<String>,
+    /// Local artifact path for provider development. Released packages use
+    /// `package` and `version`, resolved through the project's air.lock.
+    #[serde(default)]
     pub path: String,
+    pub package: Option<String>,
+    pub version: Option<String>,
 }
 
 /// A directory granted to the application. WASI gives a component no ambient
@@ -229,6 +234,7 @@ pub fn load(path: &str) -> wasmtime::Result<Manifest> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+    crate::provider::resolve(&base, &mut manifest.providers)?;
     manifest.target = resolve_target(&manifest, &base)?;
     // A frame loop needs `ai-direct:host/ui`, which is a WIT interface: there
     // is no Core host for it any more. Saying so here keeps the failure at the

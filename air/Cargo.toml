@@ -12,3 +12,4 @@ crossterm = "0.28"
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 wat = "1.258.0"
 wit-parser = "0.254.0"
+sha2 = "0.10"

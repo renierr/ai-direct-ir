@@ -6,6 +6,7 @@ mod cmds;
 mod component;
 mod gui;
 mod manifest;
+mod provider;
 mod term;
 mod wit;
 
@@ -98,6 +99,33 @@ fn main() -> Result<()> {
                 return usage_err("missing app module", "air init <app.wasm>");
             }
             cmds::cmd_init(&engine, arg1)
+        }
+        "add" => {
+            let Some((source, package)) = args[1..].split_first() else {
+                return usage_err(
+                    "missing provider",
+                    "air add --from <package-dir> <package>@<version>",
+                );
+            };
+            if source != "--from" {
+                return usage_err(
+                    "missing --from",
+                    "air add --from <package-dir> <package>@<version>",
+                );
+            }
+            let Some((directory, package)) = package.split_first() else {
+                return usage_err(
+                    "missing package directory",
+                    "air add --from <package-dir> <package>@<version>",
+                );
+            };
+            let Some(package) = package.first() else {
+                return usage_err(
+                    "missing package",
+                    "air add --from <package-dir> <package>@<version>",
+                );
+            };
+            cmds::cmd_add(directory, package)
         }
         "new" => {
             if arg1.is_empty() {

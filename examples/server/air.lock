@@ -1,0 +1,10 @@
+[[provider]]
+package = "ai-direct:sha256"
+version = "0.1.0"
+target = "wasm32-wasi"
+sha256 = "fa27d4aeb173e14082fd588c77e55f34ed4f930469622baf3f24f4d528138cc2"
+wit_sha256 = "8ba2b4c448035c6c95e1a3034764bcb60c39ee1e0f14b77b678e79f6da1c6459"
+metadata_sha256 = "302a98e951ab641ed67870e78062fd2ea9ddf7891d21e2f487bfce5a14deabc3"
+license = "Apache-2.0 AND (MIT OR Apache-2.0)"
+source = "local"
+artifact = "artifacts/wasm32-wasi/sha256.component.wasm"

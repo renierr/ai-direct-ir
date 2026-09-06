@@ -66,6 +66,17 @@ for state) and `network = true` / `--net` for sockets. `mode = "gui"` picks
 the per-frame host loop for a component importing `ai-direct:host/ui`;
 `target = "gui"` does not exist.
 
+`air dist` deliberately retains that checked multi-file layout. It copies only
+the app, its declared providers, the host, manifest, and portable grants -- not
+every `.wasm` in a project -- so the bundle is standalone and each provider is
+inspectable. Composition into one component is deferred: an in-process spike
+with the maintained `wac-graph` library succeeded for the flat provider-demo,
+but produced an invalid component for the real server plus SHA-256 provider
+graph (`instance not valid to be used as import`). The proven runtime-linking
+path is the release default until a representative graph validates and runs as
+a standalone fused artifact. One file is a convenience, not a reason to risk a
+release path or hide provider provenance.
+
 ## Current Verification
 
 ```bash
@@ -102,9 +113,18 @@ scanner, address parsing, byte-length decoding, and emitted lowerings.
 - Validation-error mapping to source lines is effectively Core-module-only:
   multi-module components report the module index against one function-index
   space per module.
-- No provider resolver, lockfile, or `air add`. Catalog packages reach
-  consumers by hand copy into `vendor/`; nothing checks a copy against the
-  catalog or resolves a version.
+- Provider resolution is intentionally offline-first. `air add --from
+  <released-package-dir> <package>@<version>` verifies the release component,
+  its declared SHA-256, provider metadata, and WIT; copies the package into
+  `$XDG_CACHE_HOME/air/providers` (or `~/.cache/air/providers`); adds a package
+  declaration to `host.toml`; and writes the portable, committed `air.lock`.
+  `build`, `check`, `run`, and `dist` resolve only the lock and rehash artifact,
+  metadata, and WIT every time. A missing or changed cache entry fails rather
+  than fetching or upgrading. `dist` writes a provenance `air.lock` and places
+  locked artifacts under collision-proof `providers/<package>-<version>-<hash>`
+  paths. There is deliberately no registry fetch, update solver, authentication,
+  or network policy yet; prove local catalog consumption through the mail driver
+  before adding them.
 - A prebuilt Core module cannot be lifted by `air` alone (`wasm-tools
   component new` + Preview 1 adapter). `air init` names the commands; the
   step sits with whoever packages the provider.
@@ -139,13 +159,17 @@ specification-only before more specification is written.
    pointer goes. Waits on a long-lived collection stating the requirement —
    drive the mail app's data needs until a bump pointer is insufficient, and
    treat whatever it states as the allocator's specification.
-3. Decide build-time composition only when a released provider needs a single
-   fused artifact or handle passing.
-4. Prove provider consumption through the mail driver: a `[[providers]]`
-   entry and an imported interface against the proposed contract. The point
-   is the contract-shape proof for the harness path, not mail functionality
-   — what it validates is that a demanding consumer can consume a provider
-   before a consequential dependency is chosen.
+3. Prove the offline-first provider store through the mail driver: install the
+   proposed provider package with `air add`, commit its `air.lock`, and build,
+   check, run, and dist from the locked cache. This is the contract-shape proof
+   for the harness path, not mail functionality. Only then decide registry
+   fetch and update commands.
+4. Revisit optional build-time composition only when a released provider needs
+   one fused artifact or handle passing. `wac-graph` can compose in-process but
+   is not a dependency today: its flat-demo output worked, its server+SHA-256
+   output was invalid. Require a representative graph that validates and runs
+   standalone, lockfile-backed provenance, and explicit resource-handle
+   semantics. Keep multi-file `dist` as the correct fallback.
 5. After the component path works end to end, present SQLite candidates for
    approval; only then add the generic writable data capability (harness)
    and a `mail-store` provider (catalog). The mail app is the testbed that

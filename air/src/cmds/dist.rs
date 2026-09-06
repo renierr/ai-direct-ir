@@ -103,14 +103,21 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         // does not contain them, it imports their interfaces, so a
         // distribution without them cannot instantiate.
         let mut providers = Vec::new();
+        let mut provider_paths = Vec::new();
         for provider in &manifest.providers {
-            let path = copy_bundle_file(&base, &dist, &provider.path)?;
+            let path = copy_provider_file(&base, &dist, provider)?;
             let mut item = toml::Table::new();
-            item.insert("path".into(), toml::Value::String(path));
+            item.insert("path".into(), toml::Value::String(path.clone()));
             providers.push(toml::Value::Table(item));
+            provider_paths.push(path);
         }
         if !providers.is_empty() {
             manifest_out.insert("providers".into(), toml::Value::Array(providers));
+        }
+        if let Some(lock) =
+            crate::provider::distribution_lock(&base, &manifest.providers, &provider_paths)?
+        {
+            std::fs::write(dist.join("air.lock"), lock)?;
         }
         let executable = std::env::current_exe()?;
         let host_name = if cfg!(windows) { "air.exe" } else { "air" };
@@ -145,6 +152,29 @@ pub fn cmd_dist(path: &str) -> Result<()> {
         dist.display()
     );
     Ok(())
+}
+
+/// Keep released packages distinct even when they use the same artifact file
+/// name. Local development providers retain their authored path as before.
+fn copy_provider_file(
+    base: &std::path::Path,
+    dist: &std::path::Path,
+    provider: &crate::manifest::Provider,
+) -> Result<String> {
+    let (Some(package), Some(version)) = (&provider.package, &provider.version) else {
+        return copy_bundle_file(base, dist, &provider.path);
+    };
+    let source = std::fs::canonicalize(manifest_path(base, &provider.path))?;
+    let hash = crate::provider::hash(&source)?;
+    let name = format!(
+        "providers/{}-{version}-{}.wasm",
+        package.replace([':', '/'], "-"),
+        &hash[..12]
+    );
+    let dest = dist.join(&name);
+    std::fs::create_dir_all(dest.parent().expect("providers path has parent"))?;
+    std::fs::copy(source, dest)?;
+    Ok(name)
 }
 
 /// Copy a manifest-relative file under `dist/` without allowing a source path

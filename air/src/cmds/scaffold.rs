@@ -477,7 +477,7 @@ pub fn cmd_init(engine: &Engine, app_path: &str) -> Result<()> {
     out.push_str("# root = \"www\"       # uncomment to grant a directory\n");
     out.push_str("# network = true    # uncomment to allow sockets\n\n");
     out.push_str("# [[providers]]     # a component this one imports an interface from\n");
-    out.push_str("# path = \"vendor/<name>/artifacts/wasm32-wasi/<name>.component.wasm\"\n\n");
+    out.push_str("# package = \"namespace:name\"\n# version = \"0.1.0\"\n# Install it once: air add --from <released-package-dir> namespace:name@0.1.0\n\n");
     out.push_str(&format!(
         "[app]\npath = \"{pref}{stem}.wasm\"\nrun = \"wasi:cli/run\"\n"
     ));

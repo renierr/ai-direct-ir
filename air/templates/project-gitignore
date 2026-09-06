@@ -3,7 +3,7 @@
 dist/
 
 # Resolved provider packages and app-local data/secrets are not source.
-vendor/
+.air/
 data/
 build/
 config.local.toml

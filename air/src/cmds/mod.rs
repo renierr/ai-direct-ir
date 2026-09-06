@@ -1,6 +1,7 @@
 //! Subcommands: build / dist / run / serve / check / inspect / init / help,
 //! plus the few helpers they share.
 
+mod add;
 mod build;
 mod check;
 mod dist;
@@ -10,6 +11,7 @@ mod run;
 mod scaffold;
 mod serve;
 
+pub use add::cmd_add;
 pub use build::cmd_build;
 pub use check::cmd_check;
 pub use dist::cmd_dist;

@@ -18,10 +18,11 @@ mode = "command"
 root = "../.."
 guest = "/repo"
 
-# The provider is vendored, not fetched. Its hash is recorded in
-# vendor/ai-direct-sha256-0.1.0/checksums.txt.
+# Restore the locked provider once after cloning:
+# air add --from ../../../ai-direct-ir-providers/providers/sha256 ai-direct:sha256@0.1.0
 [[providers]]
-path = "vendor/ai-direct-sha256-0.1.0/artifacts/wasm32-wasi/sha256.component.wasm"
+package = "ai-direct:sha256"
+version = "0.1.0"
 
 [app]
 source = "sha256sum.wat"

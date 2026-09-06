@@ -37,6 +37,10 @@ pub fn print_help() {
     help_section(&mut out, color, "COMMANDS");
     for (command, description) in [
         (
+            "add --from <dir> <pkg>@<ver>",
+            "install a released provider and update host.toml + air.lock",
+        ),
+        (
             "build [host.toml]",
             "assemble app.source into app.path; defaults to host.toml",
         ),

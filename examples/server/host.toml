@@ -9,10 +9,11 @@ mode = "command"
 network = true
 root = "www"
 
-# The digest comes from the same vendored provider `examples/sha256sum/` uses,
-# rather than a Core bridge memory-copying into a Preview 1 module.
+# The digest comes from the locked SHA-256 package, rather than a Core bridge
+# memory-copying into a Preview 1 module.
 [[providers]]
-path = "../sha256sum/vendor/ai-direct-sha256-0.1.0/artifacts/wasm32-wasi/sha256.component.wasm"
+package = "ai-direct:sha256"
+version = "0.1.0"
 
 [app]
 source = "server.wat"

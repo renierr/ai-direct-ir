@@ -48,6 +48,46 @@ fn run(dir: &Path, args: &[&str]) -> Output {
         .expect("spawn air")
 }
 
+fn run_with_cache(dir: &Path, cache: &Path, args: &[&str]) -> Output {
+    Command::new(air_bin())
+        .args(args)
+        .current_dir(dir)
+        .env("XDG_CACHE_HOME", cache)
+        .output()
+        .expect("spawn air")
+}
+
+fn provider_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/providers")
+        .join(name)
+}
+
+fn install_example_providers(cache: &Path) {
+    let sha256 = provider_fixture("sha256").to_string_lossy().into_owned();
+    let out = run_with_cache(
+        &repo().join("examples/sha256sum"),
+        cache,
+        &["add", "--from", &sha256, "ai-direct:sha256@0.1.0"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let width = provider_fixture("text-width")
+        .to_string_lossy()
+        .into_owned();
+    let out = run_with_cache(
+        &repo().join("examples/prompts-raw"),
+        cache,
+        &["add", "--from", &width, "ai-direct:text-width@0.1.0"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+fn example_cache(name: &str) -> PathBuf {
+    let cache = scratch(name);
+    install_example_providers(&cache);
+    cache
+}
+
 fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
@@ -225,6 +265,8 @@ fn missing_includes_are_rejected() {
 fn repository_examples_check() {
     let _shared = examples_lock();
     let repo = repo();
+    let cache = scratch("examples-cache");
+    install_example_providers(&cache);
     let manifests = [
         "examples/hello/host.toml",
         "examples/pi/host.toml",
@@ -236,7 +278,7 @@ fn repository_examples_check() {
         "examples/tcp-hello/host.toml",
     ];
     for manifest in manifests {
-        let out = run(&repo, &["check", manifest]);
+        let out = run_with_cache(&repo, &cache, &["check", manifest]);
         assert!(
             out.status.success(),
             "check {manifest} failed: {}",
@@ -355,7 +397,7 @@ fn tcp_hello_example_serves_connections_until_told_to_stop() {
 
 /// `examples/server/` as a component: it owns its accept loop through
 /// `wasi:sockets`, reads `www/` through `wasi:filesystem`, and gets its digest
-/// from the vendored `ai-direct:sha256` provider. Nothing here goes through a
+/// from the locked `ai-direct:sha256` provider. Nothing here goes through a
 /// host syscall -- the `net.*` layer it used to depend on no longer exists.
 ///
 /// This is coverage the Core version never had: it was only ever `air check`ed
@@ -364,12 +406,14 @@ fn tcp_hello_example_serves_connections_until_told_to_stop() {
 fn server_example_serves_files_and_digests() {
     let _shared = examples_lock();
     let repo = repo();
-    let built = run(&repo, &["build", "examples/server/host.toml"]);
+    let cache = example_cache("server-run-cache");
+    let built = run_with_cache(&repo, &cache, &["build", "examples/server/host.toml"]);
     assert!(built.status.success(), "build failed: {}", stderr(&built));
 
     let child = Command::new(air_bin())
         .args(["run", "examples/server/host.toml"])
         .current_dir(&repo)
+        .env("XDG_CACHE_HOME", cache)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -605,6 +649,81 @@ fn a_core_module_is_rejected_as_a_provider() {
 }
 
 #[test]
+fn add_locks_a_released_provider_from_the_local_store_and_dist_namespaces_it() {
+    let project = scaffold("provider-store");
+    let cache = scratch("provider-store-cache");
+    let package = provider_fixture("sha256");
+    let package = package.to_string_lossy().into_owned();
+    let added = run_with_cache(
+        &project,
+        &cache,
+        &["add", "--from", &package, "ai-direct:sha256@0.1.0"],
+    );
+    assert!(added.status.success(), "{}", stderr(&added));
+    let manifest = std::fs::read_to_string(project.join("host.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("package = \"ai-direct:sha256\""),
+        "{manifest}"
+    );
+    assert!(manifest.contains("version = \"0.1.0\""), "{manifest}");
+    let lock = std::fs::read_to_string(project.join("air.lock")).expect("read lock");
+    assert!(lock.contains("sha256 = \"fa27d4aeb173e"), "{lock}");
+
+    let checked = run_with_cache(&project, &cache, &["check"]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    let dist = run_with_cache(&project, &cache, &["dist"]);
+    assert!(dist.status.success(), "{}", stderr(&dist));
+    let bundle = project.join("dist");
+    assert!(
+        bundle.join("air.lock").is_file(),
+        "missing release lockfile"
+    );
+    let release = std::fs::read_to_string(bundle.join("host.toml")).expect("read release manifest");
+    assert!(
+        release.contains("providers/ai-direct-sha256-0.1.0-"),
+        "{release}"
+    );
+    let ran = Command::new(bundle.join("air"))
+        .args(["run", "host.toml"])
+        .current_dir(&bundle)
+        .output()
+        .expect("run standalone bundle");
+    assert!(ran.status.success(), "{}", stderr(&ran));
+}
+
+#[test]
+fn a_locked_provider_never_silently_uses_missing_or_modified_store_content() {
+    let project = scaffold("provider-store-integrity");
+    let cache = scratch("provider-store-integrity-cache");
+    let package = provider_fixture("sha256");
+    let package = package.to_string_lossy().into_owned();
+    let added = run_with_cache(
+        &project,
+        &cache,
+        &["add", "--from", &package, "ai-direct:sha256@0.1.0"],
+    );
+    assert!(added.status.success(), "{}", stderr(&added));
+    let lock = std::fs::read_to_string(project.join("air.lock")).expect("read lock");
+    let hash = lock
+        .lines()
+        .find_map(|line| line.strip_prefix("sha256 = \"")?.strip_suffix('"'))
+        .expect("artifact hash in lock");
+    let artifact = cache
+        .join("air/providers")
+        .join(hash)
+        .join("artifacts/wasm32-wasi/sha256.component.wasm");
+    std::fs::write(&artifact, "not wasm").expect("tamper cached artifact");
+
+    let checked = run_with_cache(&project, &cache, &["check"]);
+    assert!(!checked.status.success(), "tampered store must fail");
+    assert!(
+        stderr(&checked).contains("hash mismatch"),
+        "{}",
+        stderr(&checked)
+    );
+}
+
+#[test]
 fn provider_mismatch_names_the_provider_and_the_missing_function() {
     let project = scratch("provider-mismatch");
     // The provider offers `shout`; the consumer wants `shout` plus a
@@ -642,7 +761,7 @@ fn provider_mismatch_names_the_provider_and_the_missing_function() {
     assert!(err.contains("whisper"), "{err}");
 }
 
-/// The vendored `ai-direct:text-width` provider, exercised on the case
+/// The released `ai-direct:text-width` provider, exercised on the case
 /// `examples/prompts-raw/` depends on: a styled label whose column count is
 /// neither its 28 bytes nor its 24 characters. ANSI CSI sequences cost no
 /// columns and `◆` costs one, so the answer is 15.
@@ -650,9 +769,9 @@ fn provider_mismatch_names_the_provider_and_the_missing_function() {
 fn the_vendored_width_provider_measures_terminal_columns() {
     let project = scaffold_target("vendored-width", "component");
     let artifact = repo()
-        .join("examples/prompts-raw/vendor/ai-direct-text-width-0.1.0")
+        .join("air/tests/fixtures/providers/text-width")
         .join("artifacts/wasm32-wasi/text-width.component.wasm");
-    assert!(artifact.exists(), "vendored provider is missing");
+    assert!(artifact.exists(), "provider fixture is missing");
     let manifest = project.join("host.toml");
     let mut text = std::fs::read_to_string(&manifest).expect("read manifest");
     text.push_str(&format!(
@@ -723,9 +842,11 @@ fn the_vendored_width_provider_measures_terminal_columns() {
 #[test]
 fn prompts_raw_example_refuses_a_pipe() {
     let _shared = examples_lock();
+    let cache = example_cache("prompts-raw-cache");
     let out = Command::new(air_bin())
         .args(["run", "examples/prompts-raw/host.toml"])
         .current_dir(repo())
+        .env("XDG_CACHE_HOME", cache)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1083,22 +1204,27 @@ fn a_core_module_is_rejected_by_the_component_target() {
 fn a_distribution_carries_its_providers_and_its_grants() {
     let _shared = examples_lock();
     let repo = repo();
-    let built = run(&repo, &["build", "examples/server/host.toml"]);
+    let cache = example_cache("server-dist-cache");
+    let built = run_with_cache(&repo, &cache, &["build", "examples/server/host.toml"]);
     assert!(built.status.success(), "build failed: {}", stderr(&built));
-    let out = run(&repo, &["dist", "examples/server/host.toml"]);
+    let out = run_with_cache(&repo, &cache, &["dist", "examples/server/host.toml"]);
     assert!(out.status.success(), "dist failed: {}", stderr(&out));
     let dist = repo.join("examples/server/dist");
 
     // The artifact imports the provider's interface rather than containing it,
     // so a distribution without the component cannot instantiate.
     assert!(
-        dist.join("sha256.component.wasm").is_file(),
+        dist.join("providers/ai-direct-sha256-0.1.0-fa27d4aeb173.wasm")
+            .is_file(),
         "dist did not bundle the provider component"
     );
     let manifest = std::fs::read_to_string(dist.join("host.toml")).expect("read dist manifest");
     // A grant belongs to the application, not to the shell that packaged it.
     assert!(manifest.contains("network = true"), "{manifest}");
-    assert!(manifest.contains("sha256.component.wasm"), "{manifest}");
+    assert!(
+        manifest.contains("providers/ai-direct-sha256-0.1.0-fa27d4aeb173.wasm"),
+        "{manifest}"
+    );
 
     // The real proof is that the copy runs on its own.
     let child = Command::new(dist.join("air"))
@@ -1129,7 +1255,8 @@ fn a_distribution_carries_its_providers_and_its_grants() {
 fn a_root_that_cannot_travel_is_dropped_with_a_note() {
     let _shared = examples_lock();
     let repo = repo();
-    let out = run(&repo, &["dist", "examples/sha256sum/host.toml"]);
+    let cache = example_cache("sha256-dist-cache");
+    let out = run_with_cache(&repo, &cache, &["dist", "examples/sha256sum/host.toml"]);
     assert!(out.status.success(), "dist failed: {}", stderr(&out));
     assert!(stderr(&out).contains("cannot travel"), "{}", stderr(&out));
     assert!(stderr(&out).contains("--dir"), "{}", stderr(&out));
@@ -1144,7 +1271,8 @@ fn a_root_that_cannot_travel_is_dropped_with_a_note() {
         "the repo got copied in"
     );
     assert!(
-        dist.join("sha256.component.wasm").is_file(),
+        dist.join("providers/ai-direct-sha256-0.1.0-fa27d4aeb173.wasm")
+            .is_file(),
         "provider missing"
     );
 
@@ -1800,6 +1928,7 @@ fn prompts_cancel_message_is_not_truncated() {
 fn sha256sum_example_matches_a_known_digest() {
     let _guard = examples_lock();
     let project = repo().join("examples/sha256sum");
+    let cache = example_cache("sha256-run-cache");
 
     // "abc" is the FIPS 180-4 vector; the file holds exactly those three bytes.
     let fixture = project.join("abc.txt");
@@ -1808,7 +1937,7 @@ fn sha256sum_example_matches_a_known_digest() {
     // The manifest grants the repository, and its paths are project-relative,
     // so the argument is named from the repository root wherever `air` is run.
     let arg = "examples/sha256sum/abc.txt";
-    let out = run(&project, &["run", "host.toml", arg]);
+    let out = run_with_cache(&project, &cache, &["run", "host.toml", arg]);
     assert!(out.status.success(), "run failed: {}", stderr(&out));
     assert_eq!(
         stdout(&out),
@@ -1823,13 +1952,14 @@ fn sha256sum_example_matches_a_known_digest() {
 fn sha256sum_example_reports_usage_and_errors() {
     let _guard = examples_lock();
     let project = repo().join("examples/sha256sum");
+    let cache = example_cache("sha256-errors-cache");
 
-    let helped = run(&project, &["run", "host.toml", "--help"]);
+    let helped = run_with_cache(&project, &cache, &["run", "host.toml", "--help"]);
     assert!(helped.status.success(), "{}", stderr(&helped));
     assert!(stdout(&helped).contains("usage:"), "{}", stdout(&helped));
 
     // No argument at all: argv reached the guest and it saw only argv[0].
-    let bare = run(&project, &["run", "host.toml"]);
+    let bare = run_with_cache(&project, &cache, &["run", "host.toml"]);
     assert_eq!(bare.status.code(), Some(1), "{}", stderr(&bare));
     assert!(
         stderr(&bare).contains("expected one file"),
@@ -1837,7 +1967,7 @@ fn sha256sum_example_reports_usage_and_errors() {
         stderr(&bare)
     );
 
-    let missing = run(&project, &["run", "host.toml", "nope.txt"]);
+    let missing = run_with_cache(&project, &cache, &["run", "host.toml", "nope.txt"]);
     assert_eq!(missing.status.code(), Some(2), "{}", stderr(&missing));
 }
 
@@ -1848,19 +1978,24 @@ fn sha256sum_example_reports_usage_and_errors() {
 fn dir_grants_a_directory_to_the_guest() {
     let _guard = examples_lock();
     let project = repo().join("examples/sha256sum");
+    let cache = example_cache("sha256-dir-cache");
     let manifest = project.join("host.toml");
     let manifest = manifest.to_str().expect("utf-8 path");
 
     // The manifest grants the repository, so reach for something outside it.
     // Nothing is readable that was not granted, and the app says so.
-    let denied = run(&repo(), &["run", manifest, "/etc/hostname"]);
+    let denied = run_with_cache(&repo(), &cache, &["run", manifest, "/etc/hostname"]);
     assert_eq!(denied.status.code(), Some(2), "{}", stderr(&denied));
     let message = stderr(&denied);
     assert!(message.contains("cannot open"), "{message}");
     assert!(message.contains("--dir"), "{message}");
 
     // `--dir /` grants everything, and an absolute path then works as written.
-    let granted = run(&repo(), &["run", "--dir", "/", manifest, "/etc/hostname"]);
+    let granted = run_with_cache(
+        &repo(),
+        &cache,
+        &["run", "--dir", "/", manifest, "/etc/hostname"],
+    );
     assert!(granted.status.success(), "{}", stderr(&granted));
     let digest = std::process::Command::new("sha256sum")
         .arg("/etc/hostname")

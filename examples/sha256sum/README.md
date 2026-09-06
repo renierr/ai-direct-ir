@@ -8,6 +8,13 @@ air run examples/sha256sum/host.toml -                # digest stdin
 air run examples/sha256sum/host.toml --help
 ```
 
+After a fresh clone, restore the immutable provider named by `air.lock`:
+
+```bash
+cd examples/sha256sum
+air add --from ../../../ai-direct-ir-providers/providers/sha256 ai-direct:sha256@0.1.0
+```
+
 **A file has to be granted before it can be read.** WASI has no global
 filesystem root: a component reaches only the directories the host preopened
 for it, and an absolute path is not a path to anywhere on its own. Grant one
@@ -35,9 +42,9 @@ Exit codes: `0` success, `1` usage, `2` I/O failure. Output matches coreutils
 ## What it proves
 
 - **Someone else's compiled work.** The cryptography is the RustCrypto `sha2`
-  crate, built into a component in `ai-direct-ir-providers` and **vendored**
-  into `vendor/` with its hash and license notices. No code here computes a
-  digest.
+  crate, built into a component in `ai-direct-ir-providers` and installed into
+  the local `air` provider cache. `air.lock` pins its hash, WIT and license;
+  no code here computes a digest.
 - **A WASI interface the harness has never heard of.** `air` contains no
   filesystem code: `;; @wasi ... filesystem` generates the `wasi:filesystem`
   boundary from the vendored WASI WIT, and the three `(import "fs" ...)` lines
@@ -54,12 +61,13 @@ Exit codes: `0` success, `1` usage, `2` I/O failure. Output matches coreutils
 |---|---|
 | `sha256sum.wat` | the whole application: arguments, file reading, output |
 | `host.toml` | `root` preopens the directory the app may read |
-| `vendor/ai-direct-sha256-0.1.0/` | the vendored provider, hash-locked |
+| `air.lock` | exact provider package, artifact/WIT/metadata hashes, license |
 
-Verify the vendored artifact against its release:
+`air add` verifies the released artifact before caching it; later commands
+verify it again before use. Inspect the installed cache package if needed:
 
 ```bash
-cd vendor/ai-direct-sha256-0.1.0 && sha256sum -c checksums.txt
+sha256sum ~/.cache/air/providers/fa27d4aeb173e14082fd588c77e55f34ed4f930469622baf3f24f4d528138cc2/artifacts/wasm32-wasi/sha256.component.wasm
 ```
 
 ## Limits

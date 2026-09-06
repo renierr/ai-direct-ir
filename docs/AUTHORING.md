@@ -170,7 +170,8 @@ path = "data"      # project-relative: <manifest dir>/data
 write = true       # read-only otherwise; writing is the exception
 
 [[providers]]
-path = "vendor/.../provider.component.wasm"  # vendored, hash-locked
+package = "ai-direct:sha256"  # resolved from committed air.lock
+version = "0.1.0"
 
 [app]
 source = "app.wat"
@@ -199,3 +200,30 @@ a server is a component that owns its accept loop (`examples/server/`,
 Host options come first on the command line so an application never has
 to escape its own flags: `air run [--dir <path>...] [--net] <manifest>
 [args...]` — everything from the manifest on belongs to the guest.
+
+## Provider Packages
+
+For a released provider, install a reviewed local package once, then commit
+the manifest declaration and `air.lock`, not a copied `.wasm` tree:
+
+```bash
+air add --from ../ai-direct-ir-providers/providers/sha256 ai-direct:sha256@0.1.0
+```
+
+```toml
+[[providers]]
+package = "ai-direct:sha256"
+version = "0.1.0"
+```
+
+`air add` verifies the package's declared component hash, copies it into the
+user cache (`$XDG_CACHE_HOME/air/providers`, or `~/.cache/air/providers`), and
+writes `air.lock`. `build`, `check`, `run`, and `dist` resolve only that lock
+and rehash the artifact, metadata, and WIT before use. A missing or altered
+cache entry fails; it never changes provider versions implicitly. `air dist`
+copies exactly the locked artifacts under `providers/`, with package/version/
+hash names, and carries `air.lock` as release provenance.
+
+For local provider development, keep using `source` and `path` instead. A
+single `[[providers]]` entry is either local (`source`/`path`) or released
+(`package`/`version`), never both.
