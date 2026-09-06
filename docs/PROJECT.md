@@ -9,7 +9,12 @@ stay terse on purpose. Update this file with every host capability change.
 
 AI-Direct IR lets an AI author application behavior directly in WebAssembly
 Text (WAT). `air` is the generic product: it assembles, validates, links,
-runs, and packages configured WASM applications. It must not grow a
+runs, and packages configured WASM applications. The product is the harness
+and the AI-to-IR workflow, not any application. The mail client is the
+integration driver: a demanding consumer that exercises the harness and
+proves an AI can author a real application as IR, end to end. Work happens
+in the mail repo only to validate generic capabilities here or in the
+provider catalog. It must not grow a
 library-specific or application-specific API merely because an example needs a
 dependency.
 
@@ -102,35 +107,46 @@ scanner, address parsing, byte-length decoding, and emitted lowerings.
   step sits with whoever packages the provider.
 - No generic writable WASI data mount, persistence provider, native sidecar,
   or browser provider composition.
-- The mail example is a component but still a mock inbox: proposed WIT
-  contracts only, no SQLite, IMAP/JMAP, SMTP, TLS, TUI, secrets, account, or
-  real mailbox data.
+- The mail driver is still a mock inbox: proposed WIT contracts only, no
+  SQLite, IMAP/JMAP, SMTP, TLS, TUI, secrets, account, or real mailbox data.
+  That is a missing test load, not a missing product — each of those is work
+  only insofar as it validates a generic capability.
 
 ## Next Work
 
 Ordered so each step is provable on its own, and the catalog stops being
 specification-only before more specification is written.
 
-1. Point the WIT emitter at a provider's contract. `filesystem`, `sockets`,
-   `term`, `ui` are generated; catalog provider WIT and `wasi:clocks` /
-   `wasi:random` still go through hand-written declarations. The granularity
-   rule (own imports name what to generate), the naming rule (WIT export key
-   minus bracketed kind), and `<resource>.drop` are settled; a new *known*
-   interface is a table entry in `air/src/wit.rs`. Left is the unknown one:
-   a provider WIT arriving as a file a `[[providers]]` entry names, so
-   `resolve()` takes a path and the capability table gains a load-time entry.
+1. Generate a provider's boundary from its WIT only when a catalog provider
+   makes hand-writing painful. Today's provider imports are one import plus
+   one lowering with flat signatures (`sha256sum.wat`, `provider-demo/`); the
+   transcription pain that justified the emitter (51-line filesystem,
+   39-function sockets) has no provider equivalent, and no consumer is
+   blocked. The granularity rule, the naming rule, and `<resource>.drop` are
+   settled and carry over unchanged, and a new *known* interface
+   (`wasi:clocks`, `wasi:random`) stays a one-table-entry job in
+   `air/src/wit.rs` whenever an app first imports one. The trigger for the
+   unknown-interface machinery is a provider with
+   records/variants/resources in its contract — until then this stays a
+   watch item, per the no-machinery-without-a-consumer rule. Note it does
+   not close the conformance gap either: verifying a provider artifact
+   against its WIT is separate work, and the more valuable of the two.
 2. Continue up the memory ladder: records with named fields, then a real
    allocator. Segment placement and per-iteration reset are as far as a bump
    pointer goes. Waits on a long-lived collection stating the requirement —
-   grow the mail example until it does.
+   drive the mail app's data needs until a bump pointer is insufficient, and
+   treat whatever it states as the allocator's specification.
 3. Decide build-time composition only when a released provider needs a single
    fused artifact or handle passing.
-4. Add a provider consumer proof in the mail example: a `[[providers]]`
-   entry and an imported interface, proving the contract shape before a
-   consequential dependency is chosen.
+4. Prove provider consumption through the mail driver: a `[[providers]]`
+   entry and an imported interface against the proposed contract. The point
+   is the contract-shape proof for the harness path, not mail functionality
+   — what it validates is that a demanding consumer can consume a provider
+   before a consequential dependency is chosen.
 5. After the component path works end to end, present SQLite candidates for
-   approval; only then add a generic writable data capability and a
-   `mail-store` provider.
+   approval; only then add the generic writable data capability (harness)
+   and a `mail-store` provider (catalog). The mail app is the testbed that
+   justifies both, not the deliverable.
 6. Keep a standing check on WASI 0.3 rather than scheduling it. `wasmtime-wasi`
    gates p3 behind a non-default feature as experimental and incomplete, with
    no sync linker while `air` is synchronous throughout — adopt when p3 drops
