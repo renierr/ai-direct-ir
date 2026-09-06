@@ -92,6 +92,18 @@ fn install_example_providers(cache: &Path) {
         &["add", "--from", &base64, "ai-direct:base64@0.1.0"],
     );
     assert!(out.status.success(), "{}", stderr(&out));
+    let sqlite = repo()
+        .parent()
+        .expect("workspace parent")
+        .join("ai-direct-ir-providers/providers/sqlite")
+        .to_string_lossy()
+        .into_owned();
+    let out = run_with_cache(
+        &repo().join("examples/sqlite-tables"),
+        cache,
+        &["add", "--from", &sqlite, "ai-direct:sqlite@0.1.0"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
 }
 
 fn example_cache(name: &str) -> PathBuf {
@@ -289,6 +301,7 @@ fn repository_examples_check() {
         "examples/gui-hello/host.toml",
         "examples/provider-demo/host.toml",
         "examples/tcp-hello/host.toml",
+        "examples/sqlite-tables/host.toml",
     ];
     for manifest in manifests {
         let out = run_with_cache(&repo, &cache, &["check", manifest]);
@@ -2029,6 +2042,29 @@ fn sha256sum_example_reports_usage_and_errors() {
 
     let missing = run_with_cache(&project, &cache, &["run", "host.toml", "nope.txt"]);
     assert_eq!(missing.status.code(), Some(2), "{}", stderr(&missing));
+}
+
+/// The sqlite example lists tables from a seeded database through the
+/// provider. The fixture is `examples/sqlite-tables/seed.sh` output,
+/// committed so the suite needs no `sqlite3` binary.
+#[test]
+fn sqlite_tables_example_lists_tables() {
+    let _guard = examples_lock();
+    let project = repo().join("examples/sqlite-tables");
+    let cache = example_cache("sqlite-tables-cache");
+    let data = project.join("data");
+    std::fs::create_dir_all(&data).expect("create data dir");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sqlite-tables-app.db"),
+        data.join("app.db"),
+    )
+    .expect("seed database");
+
+    let out = run_with_cache(&project, &cache, &["run", "host.toml"]);
+    assert!(out.status.success(), "run failed: {}", stderr(&out));
+    assert_eq!(stdout(&out), "orders\nusers\n");
+
+    let _ = std::fs::remove_file(data.join("app.db"));
 }
 
 /// `--dir` grants a directory the manifest did not, which is what makes a tool

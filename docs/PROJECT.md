@@ -94,7 +94,8 @@ and `;; @data` placement; import-narrowed boundaries; handle drops;
 `heap-mark`/`heap-reset` under load; every example checking; `hello`/`pi`
 stdout; `tcp-hello` over a real socket with and without the network grant;
 `server` static routes, 404/403, provider digest, per-request drops+reset,
-`/quit`; `ui`/`term` command-mode boundary crossings. Unit tests cover the
+`/quit`; `sqlite-tables` lists tables through the sqlite provider against
+a seeded database; `ui`/`term` command-mode boundary crossings. Unit tests cover the
 scanner, address parsing, byte-length decoding, and emitted lowerings.
 
 ## Current Gaps
@@ -137,8 +138,13 @@ scanner, address parsing, byte-length decoding, and emitted lowerings.
 - A prebuilt Core module cannot be lifted by `air` alone (`wasm-tools
   component new` + Preview 1 adapter). `air init` names the commands; the
   step sits with whoever packages the provider.
-- No generic writable WASI data mount, persistence provider, native sidecar,
-  or browser provider composition.
+- No managed persistence provider, native sidecar, or browser provider
+  composition. File-backed persistence itself is proven and needs no new
+  harness mount work: `ai-direct:sqlite` round-trips a database file under
+  a `[[dirs]] write = true` grant, verified against the native `sqlite3`
+  CLI (`examples/sqlite-tables`). What is missing is a packaged consumer
+  with real store needs — the mail driver has not stated any — and any
+  lifecycle beyond granted directories (quotas, migration).
 - The mail driver is still a mock inbox: proposed WIT contracts only, no
   SQLite, IMAP/JMAP, SMTP, TLS, TUI, secrets, account, or real mailbox data.
   That is a missing test load, not a missing product — each of those is work
@@ -163,6 +169,12 @@ specification-only before more specification is written.
    watch item, per the no-machinery-without-a-consumer rule. Note it does
    not close the conformance gap either: verifying a provider artifact
    against its WIT is separate work, and the more valuable of the two.
+   `ai-direct:sqlite` is now the nearest thing to a trigger: records and
+   a variant in its contract, hand-authored on both sides (`wit-bindgen`
+   in Rust, the eq-export import pattern in WAT, documented in
+   `docs/AUTHORING.md`) at viable but real cost. Still deferred: one
+   hand-authoring is a data point, not repeated pain. A second
+   nominal-type provider that hurts the same way promotes this.
 2. Continue up the memory ladder: records with named fields, then a real
    allocator. Segment placement and per-iteration reset are as far as a bump
    pointer goes. Waits on a long-lived collection stating the requirement —
@@ -179,10 +191,18 @@ specification-only before more specification is written.
    output was invalid. Require a representative graph that validates and runs
    standalone, lockfile-backed provenance, and explicit resource-handle
    semantics. Keep multi-file `dist` as the correct fallback.
-5. After the component path works end to end, present SQLite candidates for
-   approval; only then add the generic writable data capability (harness)
-   and a `mail-store` provider (catalog). The mail app is the testbed that
-   justifies both, not the deliverable.
+5. SQLite candidates were presented and the amalgamation approved:
+   `ai-direct:sqlite@0.1.0` is built, registered, and proven through
+   `examples/sqlite-tables` (lists tables from a seeded database). The
+   predicted harness work did not survive contact with the build —
+   existing `write = true` grants persist the database, so there is no
+   separate writable-data capability to add. What remains is the actual
+   justification: the mail driver stating its store needs, which shapes a
+   `mail-store` WIT or blesses direct sqlite use. The mail app is still
+   the testbed that justifies the provider, not the deliverable. Note the
+   example follows the `--from` override pattern like the other locked
+   examples; nothing yet resolves from the Git registry at a commit that
+   includes sqlite.
 6. Keep a standing check on WASI 0.3 rather than scheduling it. `wasmtime-wasi`
    gates p3 behind a non-default feature as experimental and incomplete, with
    no sync linker while `air` is synchronous throughout — adopt when p3 drops
