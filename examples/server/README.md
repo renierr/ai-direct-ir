@@ -4,7 +4,7 @@ A static file server as a WASI 0.2 component. It owns its accept loop, reads
 one granted directory, and gets its digest from a vendored provider component.
 
 ```bash
-air run examples/server/manifest.toml          # :8124
+air run examples/server/host.toml          # :8124
 curl -i http://127.0.0.1:8124/                 # www/index.html
 curl -sS --data-binary abc http://127.0.0.1:8124/sha256
 curl -sS http://127.0.0.1:8124/quit            # stops the run
@@ -39,7 +39,7 @@ curl -sS http://127.0.0.1:8124/quit            # stops the run
 |---|---|
 | `server.wat` | the accept loop, routing, and file serving |
 | `src/http.wat` | response building and request parsing, `;; @include`d |
-| `manifest.toml` | the two grants and the provider |
+| `host.toml` | the two grants and the provider |
 | `www/` | the demo document root |
 
 ## Routes

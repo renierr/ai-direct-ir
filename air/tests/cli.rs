@@ -229,7 +229,7 @@ fn repository_examples_check() {
         "examples/hello/host.toml",
         "examples/pi/host.toml",
         "examples/prompts/host.toml",
-        "examples/server/manifest.toml",
+        "examples/server/host.toml",
         "examples/prompts-raw/host.toml",
         "examples/gui-hello/host.toml",
         "examples/provider-demo/host.toml",
@@ -364,11 +364,11 @@ fn tcp_hello_example_serves_connections_until_told_to_stop() {
 fn server_example_serves_files_and_digests() {
     let _shared = examples_lock();
     let repo = repo();
-    let built = run(&repo, &["build", "examples/server/manifest.toml"]);
+    let built = run(&repo, &["build", "examples/server/host.toml"]);
     assert!(built.status.success(), "build failed: {}", stderr(&built));
 
     let child = Command::new(air_bin())
-        .args(["run", "examples/server/manifest.toml"])
+        .args(["run", "examples/server/host.toml"])
         .current_dir(&repo)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1045,9 +1045,9 @@ fn a_core_module_is_rejected_by_the_component_target() {
 fn a_distribution_carries_its_providers_and_its_grants() {
     let _shared = examples_lock();
     let repo = repo();
-    let built = run(&repo, &["build", "examples/server/manifest.toml"]);
+    let built = run(&repo, &["build", "examples/server/host.toml"]);
     assert!(built.status.success(), "build failed: {}", stderr(&built));
-    let out = run(&repo, &["dist", "examples/server/manifest.toml"]);
+    let out = run(&repo, &["dist", "examples/server/host.toml"]);
     assert!(out.status.success(), "dist failed: {}", stderr(&out));
     let dist = repo.join("examples/server/dist");
 

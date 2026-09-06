@@ -1,5 +1,5 @@
 # Static file server as a WASI 0.2 component. Run from anywhere:
-#   air run examples/server/manifest.toml      # :8124
+#   air run examples/server/host.toml      # :8124
 #
 # The guest owns its accept loop through `wasi:sockets`, so there is no
 # `mode = "server"` and no host `net.*` layer. Two grants make it work:

@@ -37,24 +37,24 @@ pub fn print_help() {
     help_section(&mut out, color, "COMMANDS");
     for (command, description) in [
         (
-            "build [manifest.toml]",
+            "build [host.toml]",
             "assemble app.source into app.path; defaults to host.toml",
         ),
         (
-            "dist [manifest.toml]",
+            "dist [host.toml]",
             "create a self-contained dist/ bundle; defaults to host.toml",
         ),
         (
-            "run [manifest.toml]",
+            "run [host.toml]",
             "link and execute a component; defaults to host.toml",
         ),
         (
-            "serve [manifest.toml]",
+            "serve [host.toml]",
             "serve a browser app on localhost; defaults to host.toml",
         ),
-        ("<manifest.toml>", "shorthand for `run`"),
+        ("<host.toml>", "shorthand for `run`"),
         (
-            "check [manifest.toml]",
+            "check [host.toml]",
             "link everything, verify wiring; defaults to host.toml",
         ),
         (

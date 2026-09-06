@@ -14,7 +14,7 @@ use super::{cmd_check, manifest_base, manifest_path};
 pub fn cmd_dist(path: &str) -> Result<()> {
     if path == "host.toml" && !std::path::Path::new(path).is_file() {
         return fail(
-            "no host.toml in this directory; run `air dist <manifest.toml>` or change to a project directory"
+            "no host.toml in this directory; run `air dist <host.toml>` or change to a project directory"
                 .into(),
         );
     }

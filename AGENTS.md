@@ -12,7 +12,9 @@ design changes.
 `docs/PROJECT.md` is the living state: implemented behaviour, current gaps,
 ordered next work, and the reasoning behind every rule below. Read the section
 a task touches, not the whole file. Update it with every host capability
-change.
+change. `docs/AUTHORING.md` is the WAT/harness syntax reference — how to
+write components, `;; @wasi`, `;; @include`, `;; @data`, manifests, and
+grants. Read it before authoring or reviewing WAT.
 
 ## Hard rules
 

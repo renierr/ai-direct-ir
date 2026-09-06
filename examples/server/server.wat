@@ -17,7 +17,7 @@
 ;; connection, and a file served without dropping its descriptor and stream
 ;; leaks two handles per request.
 ;;
-;;   air run examples/server/manifest.toml      # :8124
+;;   air run examples/server/host.toml      # :8124
 ;;   curl -i http://127.0.0.1:8124/
 ;;   curl -sS --data-binary abc http://127.0.0.1:8124/sha256
 ;;   curl -sS http://127.0.0.1:8124/quit        # stops the run
