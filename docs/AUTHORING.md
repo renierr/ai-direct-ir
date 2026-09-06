@@ -248,3 +248,26 @@ override; its lock cannot auto-restore because it has no declared registry.
 For local provider development, keep using `source` and `path` instead. A
 single `[[providers]]` entry is either local (`source`/`path`) or released
 (`package`/`version`), never both.
+
+### Importing provider types
+
+An imported instance may not define nominal types (`record`, `variant`,
+`enum`, `flags`) inline, nor reference a component-level type directly —
+validation rejects it (`instance not valid to be used as import`). Primitives
+and structural types (`string`, `list<u8>`, `tuple`, `option`, `result` of
+those) are fine as written. For nominal types, declare locally and export
+the equality, then reference the exported id — the same pattern
+`air/src/wit.rs` generates:
+
+```wat
+(import "ai-direct:sqlite/store@0.1.0" (instance $s
+  (type $value-l (variant
+    (case "int-val" s64) (case "null-val")))
+  (export "value" (type $value-x (eq $value-l)))
+  (export "exec" (func (param "params" (list $value-x))
+    (result (result u32 (error string)))))))
+```
+
+`air` forwards the funcs by name; the types only have to agree with the
+provider's WIT. See `ai-direct:sqlite`'s `tests/consumer.wat` for the full
+working shape, including canonical-ABI layout notes.

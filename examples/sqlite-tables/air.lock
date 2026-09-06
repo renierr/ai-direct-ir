@@ -1,0 +1,13 @@
+[[provider]]
+package = "ai-direct:sqlite"
+version = "0.1.0"
+target = "wasm32-wasi"
+sha256 = "c1057f19b61d7a1c733b0bba867de975b984c02198454d858ebffbd71799f964"
+wit_sha256 = "dabc1619f4877acf291f12ff015686381f41e7f7155beca1f0b74bc717f2880e"
+metadata_sha256 = "8e7ca50f1afbd09521f493863cc14c25306c2a7702bdf4fec3cc28117b3f848f"
+license = "Apache-2.0 AND (MIT OR Apache-2.0)"
+source = "override"
+registry = "override"
+registry_revision = "local"
+registry_index_sha256 = ""
+artifact = "artifacts/wasm32-wasi/sqlite.component.wasm"

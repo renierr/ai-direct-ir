@@ -10,6 +10,9 @@ dist/
 *.o
 *.cwasm
 
+# Seeded example state — recreated by the example's seed script.
+examples/sqlite-tables/data/
+
 # Local credentials and configuration.
 .env
 

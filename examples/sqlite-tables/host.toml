@@ -1,0 +1,21 @@
+# SQLite tables is an external component provider, installed once from its
+# reviewed release package: air add --from ../../../ai-direct-ir-providers/providers/sqlite ai-direct:sqlite@0.1.0
+mode = "command"
+
+[registry]
+source = "https://github.com/renierr/ai-direct-ir-providers.git"
+
+[[providers]]
+package = "ai-direct:sqlite"
+version = "0.1.0"
+
+# The database file lives here, guest-visible as `data/app.db`.
+# The provider shares this process's preopens, so it sees the same grant.
+[[dirs]]
+path = "data"
+write = true
+
+[app]
+source = "sqlite-tables.wat"
+path = "sqlite-tables.wasm"
+run = "wasi:cli/run"
