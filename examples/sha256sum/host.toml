@@ -18,6 +18,9 @@ mode = "command"
 root = "../.."
 guest = "/repo"
 
+[registry]
+source = "https://github.com/renierr/ai-direct-ir-providers.git"
+
 # Restore the locked provider once after cloning:
 # air add --from ../../../ai-direct-ir-providers/providers/sha256 ai-direct:sha256@0.1.0
 [[providers]]

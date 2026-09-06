@@ -4,6 +4,9 @@
 # pipes.
 mode = "command"
 
+[registry]
+source = "https://github.com/renierr/ai-direct-ir-providers.git"
+
 # Terminal columns are neither bytes nor characters. This package wraps the
 # `unicode-width` crate as a component. Restore it after cloning with:
 # air add --from ../../../ai-direct-ir-providers/providers/text-width ai-direct:text-width@0.1.0

@@ -125,6 +125,13 @@ scanner, address parsing, byte-length decoding, and emitted lowerings.
   paths. There is deliberately no registry fetch, update solver, authentication,
   or network policy yet; prove local catalog consumption through the mail driver
   before adding them.
+- A manifest may declare `[registry] source = "..."`. `air add
+  <package>@<version>` selects from that local directory or Git repository;
+  its lock pins the registry index hash and, for Git, the commit. If a locked
+  cache package is missing, normal build/check/run/dist restores that exact
+  package through the declared registry, verifies it, and stays offline when
+  the cache is healthy. `--from` remains an explicit local override and cannot
+  auto-restore because it names no registry.
 - A prebuilt Core module cannot be lifted by `air` alone (`wasm-tools
   component new` + Preview 1 adapter). `air init` names the commands; the
   step sits with whoever packages the provider.

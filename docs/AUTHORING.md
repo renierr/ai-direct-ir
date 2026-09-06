@@ -210,6 +210,17 @@ the manifest declaration and `air.lock`, not a copied `.wasm` tree:
 air add --from ../ai-direct-ir-providers/providers/sha256 ai-direct:sha256@0.1.0
 ```
 
+Normally a project declares its catalog and needs no `--from`:
+
+```toml
+[registry]
+source = "https://github.com/renierr/ai-direct-ir-providers.git"
+```
+
+```bash
+air add ai-direct:sha256@0.1.0
+```
+
 ```toml
 [[providers]]
 package = "ai-direct:sha256"
@@ -223,6 +234,15 @@ and rehash the artifact, metadata, and WIT before use. A missing or altered
 cache entry fails; it never changes provider versions implicitly. `air dist`
 copies exactly the locked artifacts under `providers/`, with package/version/
 hash names, and carries `air.lock` as release provenance.
+
+The registry is used only to select a dependency with `air add`, or to restore
+a cache entry that an existing `air.lock` already pins. A normal run with a
+healthy cache is offline. A Git registry lock records both its index hash and
+the selected commit; a local registry lock records the index hash. If cached
+content is deleted, `air run`, `check`, `build`, or `dist` restores that exact
+locked package and validates it before continuing. No command silently selects
+the current/latest version. `--from` is the explicit local development
+override; its lock cannot auto-restore because it has no declared registry.
 
 For local provider development, keep using `source` and `path` instead. A
 single `[[providers]]` entry is either local (`source`/`path`) or released

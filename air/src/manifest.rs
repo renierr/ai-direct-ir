@@ -96,6 +96,14 @@ pub struct Provider {
     pub version: Option<String>,
 }
 
+/// Where released provider packages are discovered. A local directory is the
+/// first-class offline workflow; an https or ssh Git URL is cloned only by an
+/// explicit add or when a locked cache entry needs restoration.
+#[derive(Deserialize, Clone)]
+pub struct Registry {
+    pub source: String,
+}
+
 /// A directory granted to the application. WASI gives a component no ambient
 /// filesystem at all: it reaches exactly the directories listed here, under the
 /// names given here, with the permissions given here. Read-only unless the
@@ -133,6 +141,7 @@ pub struct Manifest {
     pub guest: Option<String>,
     #[serde(default)]
     pub providers: Vec<Provider>,
+    pub registry: Option<Registry>,
     #[serde(default)]
     pub dirs: Vec<Dir>,
     /// `network = true` lets the app open sockets through `wasi:sockets`.
@@ -234,7 +243,7 @@ pub fn load(path: &str) -> wasmtime::Result<Manifest> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    crate::provider::resolve(&base, &mut manifest.providers)?;
+    crate::provider::resolve(&base, manifest.registry.as_ref(), &mut manifest.providers)?;
     manifest.target = resolve_target(&manifest, &base)?;
     // A frame loop needs `ai-direct:host/ui`, which is a WIT interface: there
     // is no Core host for it any more. Saying so here keeps the failure at the

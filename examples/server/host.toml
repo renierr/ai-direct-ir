@@ -9,6 +9,9 @@ mode = "command"
 network = true
 root = "www"
 
+[registry]
+source = "https://github.com/renierr/ai-direct-ir-providers.git"
+
 # The digest comes from the locked SHA-256 package, rather than a Core bridge
 # memory-copying into a Preview 1 module.
 [[providers]]

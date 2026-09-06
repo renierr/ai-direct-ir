@@ -731,12 +731,56 @@ fn a_locked_provider_never_silently_uses_missing_or_modified_store_content() {
     std::fs::write(&artifact, "not wasm").expect("tamper cached artifact");
 
     let checked = run_with_cache(&project, &cache, &["check"]);
-    assert!(!checked.status.success(), "tampered store must fail");
     assert!(
-        stderr(&checked).contains("hash mismatch"),
+        !checked.status.success(),
+        "an override-only lock cannot repair itself"
+    );
+    assert!(
+        stderr(&checked).contains("missing from the local store"),
         "{}",
         stderr(&checked)
     );
+}
+
+#[test]
+fn a_registry_locked_provider_is_restored_when_its_cache_entry_is_corrupt() {
+    let project = scaffold("provider-registry-restore");
+    let cache = scratch("provider-registry-restore-cache");
+    let registry = scratch("provider-registry");
+    std::fs::create_dir_all(registry.join("registry")).expect("create registry index");
+    let package = provider_fixture("sha256");
+    std::fs::write(
+        registry.join("registry/index.toml"),
+        format!(
+            "[[provider]]\nname = \"ai-direct:sha256\"\nversion = \"0.1.0\"\npath = {:?}\n",
+            package.to_string_lossy()
+        ),
+    )
+    .expect("write registry index");
+    let manifest = project.join("host.toml");
+    let text = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        format!(
+            "{text}\n[registry]\nsource = {:?}\n",
+            registry.to_string_lossy()
+        ),
+    )
+    .expect("write registry manifest");
+    let added = run_with_cache(&project, &cache, &["add", "ai-direct:sha256@0.1.0"]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    let lock = std::fs::read_to_string(project.join("air.lock")).expect("read lock");
+    let hash = lock
+        .lines()
+        .find_map(|line| line.strip_prefix("sha256 = \"")?.strip_suffix('"'))
+        .expect("artifact hash in lock");
+    let artifact = cache
+        .join("air/providers")
+        .join(hash)
+        .join("artifacts/wasm32-wasi/sha256.component.wasm");
+    std::fs::write(&artifact, "corrupt").expect("corrupt cache");
+    let checked = run_with_cache(&project, &cache, &["check"]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
 }
 
 #[test]

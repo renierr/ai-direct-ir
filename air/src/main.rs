@@ -101,31 +101,30 @@ fn main() -> Result<()> {
             cmds::cmd_init(&engine, arg1)
         }
         "add" => {
-            let Some((source, package)) = args[1..].split_first() else {
+            let Some((first, rest)) = args[1..].split_first() else {
                 return usage_err(
                     "missing provider",
-                    "air add --from <package-dir> <package>@<version>",
+                    "air add [--from <package-dir>] <package>@<version>",
                 );
             };
-            if source != "--from" {
-                return usage_err(
-                    "missing --from",
-                    "air add --from <package-dir> <package>@<version>",
-                );
-            }
-            let Some((directory, package)) = package.split_first() else {
-                return usage_err(
-                    "missing package directory",
-                    "air add --from <package-dir> <package>@<version>",
-                );
+            let (source, package) = if first == "--from" {
+                let Some((directory, package)) = rest.split_first() else {
+                    return usage_err(
+                        "missing package directory",
+                        "air add --from <package-dir> <package>@<version>",
+                    );
+                };
+                (Some(directory.as_str()), package.first())
+            } else {
+                (None, Some(first))
             };
-            let Some(package) = package.first() else {
+            let Some(package) = package else {
                 return usage_err(
                     "missing package",
-                    "air add --from <package-dir> <package>@<version>",
+                    "air add [--from <package-dir>] <package>@<version>",
                 );
             };
-            cmds::cmd_add(directory, package)
+            cmds::cmd_add(source, package)
         }
         "new" => {
             if arg1.is_empty() {

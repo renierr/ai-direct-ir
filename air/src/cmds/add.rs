@@ -2,6 +2,6 @@
 
 use wasmtime::Result;
 
-pub fn cmd_add(source: &str, package: &str) -> Result<()> {
+pub fn cmd_add(source: Option<&str>, package: &str) -> Result<()> {
     crate::provider::add(source, package)
 }

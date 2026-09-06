@@ -37,8 +37,8 @@ pub fn print_help() {
     help_section(&mut out, color, "COMMANDS");
     for (command, description) in [
         (
-            "add --from <dir> <pkg>@<ver>",
-            "install a released provider and update host.toml + air.lock",
+            "add [--from <dir>] <pkg>@<ver>",
+            "install from registry (or override) and update host.toml + air.lock",
         ),
         (
             "build [host.toml]",
